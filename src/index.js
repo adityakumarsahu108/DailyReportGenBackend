@@ -61,17 +61,51 @@ export default {
                 corsHeaders
             );
 
-       } catch (error) {
+     } catch (error) {
 
-    console.error("FULL ERROR:", error);
+    console.error(
+        "WORKER ERROR OBJECT:",
+        error
+    );
+
+    console.error(
+        "WORKER ERROR STRING:",
+        String(error)
+    );
+
+    console.error(
+        "WORKER ERROR JSON:",
+        JSON.stringify(
+            error,
+            Object.getOwnPropertyNames(error)
+        )
+    );
 
     return jsonResponse(
         {
             success: false,
-            error: error.message,
-            stack: error.stack
+
+            error:
+                error?.message ||
+                String(error),
+
+            errorName:
+                error?.name ||
+                null,
+
+            errorDetails:
+                JSON.stringify(
+                    error,
+                    Object.getOwnPropertyNames(error)
+                ),
+
+            stack:
+                error?.stack ||
+                null
         },
+
         500,
+
         corsHeaders
     );
 }
@@ -213,7 +247,16 @@ async function handleCreateReport(
     ==========================================
     */
 
-    for (const alert of cyeraRecords) {
+   for (let i = 0; i < cyeraRecords.length; i++) {
+
+    const alert = cyeraRecords[i];
+
+    console.log(
+        `Processing Cyera alert ${i + 1}/${cyeraRecords.length}`,
+        alert.id
+    );
+
+    try {
 
         await env.DB
             .prepare(`
@@ -296,10 +339,24 @@ async function handleCreateReport(
                 alert.configuredAction || null,
 
                 alert.dataType || null
+
             )
             .run();
-    }
 
+    } catch (error) {
+
+        console.error(
+            `CYERA INSERT FAILED AT RECORD ${i + 1}`,
+            {
+                alertId: alert.id,
+                alertName: alert.name,
+                error: String(error)
+            }
+        );
+
+        throw error;
+    }
+}
 
     /*
     ==========================================
