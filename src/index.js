@@ -62,6 +62,18 @@ export default {
                 );
             }
 
+            // Analytics trends
+            if (
+                request.method === "GET" &&
+                url.pathname === "/api/v1/analytics/trends"
+            ) {
+
+                return await handleAnalyticsTrends(
+                    env,
+                    corsHeaders
+                );
+            }
+
             return jsonResponse(
                 {
                     success: false,
@@ -71,27 +83,27 @@ export default {
                 corsHeaders
             );
 
- } catch (error) {
+        } catch (error) {
 
-    console.error(
-        "Worker error:",
-        error
-    );
+            console.error(
+                "Worker error:",
+                error
+            );
 
-    return jsonResponse(
-        {
-            success: false,
+            return jsonResponse(
+                {
+                    success: false,
 
-            error:
-                error?.message ||
-                String(error)
-        },
+                    error:
+                        error?.message ||
+                        String(error)
+                },
 
-        500,
+                500,
 
-        corsHeaders
-    );
-}
+                corsHeaders
+            );
+        }
     }
 };
 
@@ -230,19 +242,19 @@ async function handleCreateReport(
     ==========================================
     */
 
-   for (let i = 0; i < cyeraRecords.length; i++) {
+    for (let i = 0; i < cyeraRecords.length; i++) {
 
-    const alert = cyeraRecords[i];
+        const alert = cyeraRecords[i];
 
-    console.log(
-        `Processing Cyera alert ${i + 1}/${cyeraRecords.length}`,
-        alert.id
-    );
+        console.log(
+            `Processing Cyera alert ${i + 1}/${cyeraRecords.length}`,
+            alert.id
+        );
 
-    try {
+        try {
 
-        await env.DB
-            .prepare(`
+            await env.DB
+                .prepare(`
                 INSERT INTO cyera_alerts (
 
                     report_id,
@@ -287,59 +299,59 @@ async function handleCreateReport(
                     ?, ?, ?, ?, ?, ?, ?
                 )
             `)
-            .bind(
+                .bind(
 
-                reportId,
+                    reportId,
 
-                alert.id || null,
-                alert.name || null,
+                    alert.id || null,
+                    alert.name || null,
 
-                alert.timestamp || null,
-                alert.updatedAt || null,
+                    alert.timestamp || null,
+                    alert.updatedAt || null,
 
-                alert.severity || null,
-                alert.originalSeverity || null,
-                alert.externalSeverity || null,
+                    alert.severity || null,
+                    alert.originalSeverity || null,
+                    alert.externalSeverity || null,
 
-                alert.status || null,
-                alert.statusUpdatedAt || null,
+                    alert.status || null,
+                    alert.statusUpdatedAt || null,
 
-                alert.assignedUserEmail || null,
-                alert.assignedUserId || null,
+                    alert.assignedUserEmail || null,
+                    alert.assignedUserId || null,
 
-                alert.triggeringUser || null,
-                alert.authenticatedUser || null,
+                    alert.triggeringUser || null,
+                    alert.authenticatedUser || null,
 
-                alert.policy?.id || null,
-                alert.policy?.name || null,
-                alert.policy?.type || null,
-                alert.policy?.action || null,
+                    alert.policy?.id || null,
+                    alert.policy?.name || null,
+                    alert.policy?.type || null,
+                    alert.policy?.action || null,
 
-                alert.channel || null,
+                    alert.channel || null,
 
-                alert.sourceActivity || null,
-                alert.actualAction || null,
-                alert.configuredAction || null,
+                    alert.sourceActivity || null,
+                    alert.actualAction || null,
+                    alert.configuredAction || null,
 
-                alert.dataType || null
+                    alert.dataType || null
 
-            )
-            .run();
+                )
+                .run();
 
-    } catch (error) {
+        } catch (error) {
 
-        console.error(
-            `CYERA INSERT FAILED AT RECORD ${i + 1}`,
-            {
-                alertId: alert.id,
-                alertName: alert.name,
-                error: String(error)
-            }
-        );
+            console.error(
+                `CYERA INSERT FAILED AT RECORD ${i + 1}`,
+                {
+                    alertId: alert.id,
+                    alertName: alert.name,
+                    error: String(error)
+                }
+            );
 
-        throw error;
+            throw error;
+        }
     }
-}
 
     /*
     ==========================================
@@ -717,7 +729,50 @@ async function handleAnalyticsSummary(
         corsHeaders
     );
 }
+/*
+==========================================
+ANALYTICS TRENDS
+==========================================
+*/
 
+async function handleAnalyticsTrends(
+    env,
+    corsHeaders
+) {
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+
+                report_date AS date,
+
+                cyera_count AS cyera,
+
+                purview_count AS purview,
+
+                total_alerts AS total
+
+            FROM reports
+
+            ORDER BY report_date ASC
+        `)
+        .all();
+
+
+    return jsonResponse(
+
+        {
+            success: true,
+
+            trends:
+                result.results || []
+        },
+
+        200,
+
+        corsHeaders
+    );
+}
 /*
 ==========================================
 VALIDATION
