@@ -1,0 +1,8 @@
+name = "daily-report-api"
+main = "src/index.js"
+compatibility_date = "2026-08-20"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daily-report-db"
+database_id = "36c03576-19ae-46f4-a4f1-357afd7b99ac"
