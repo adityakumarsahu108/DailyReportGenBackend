@@ -50,7 +50,17 @@ export default {
                     corsHeaders
                 );
             }
+            // Analytics summary
+            if (
+                request.method === "GET" &&
+                url.pathname === "/api/v1/analytics/summary"
+            ) {
 
+                return await handleAnalyticsSummary(
+                    env,
+                    corsHeaders
+                );
+            }
 
             return jsonResponse(
                 {
@@ -201,7 +211,7 @@ async function handleCreateReport(
             cyeraRecords.length,
             purviewRecords.length,
             cyeraRecords.length +
-                purviewRecords.length
+            purviewRecords.length
         )
         .run();
 
@@ -374,7 +384,308 @@ async function handleCreateReport(
         corsHeaders
     );
 }
+/*
+==========================================
+ANALYTICS SUMMARY
+==========================================
+*/
 
+async function handleAnalyticsSummary(
+    env,
+    corsHeaders
+) {
+
+    /*
+    ==========================================
+    Overall totals
+    ==========================================
+    */
+
+    const totals = await env.DB
+        .prepare(`
+            SELECT
+
+                COUNT(*) AS totalReports,
+
+                COALESCE(
+                    SUM(total_alerts),
+                    0
+                ) AS totalAlerts,
+
+                COALESCE(
+                    SUM(cyera_count),
+                    0
+                ) AS totalCyeraAlerts,
+
+                COALESCE(
+                    SUM(purview_count),
+                    0
+                ) AS totalPurviewAlerts
+
+            FROM reports
+        `)
+        .first();
+
+
+    /*
+    ==========================================
+    Latest report
+    ==========================================
+    */
+
+    const latestReport = await env.DB
+        .prepare(`
+            SELECT
+
+                report_id,
+                report_date,
+
+                cyera_count,
+                purview_count,
+                total_alerts,
+
+                generated_at
+
+            FROM reports
+
+            ORDER BY created_at DESC
+
+            LIMIT 1
+        `)
+        .first();
+
+
+    /*
+    ==========================================
+    Cyera severity
+    ==========================================
+    */
+
+    const cyeraSeverityResult = await env.DB
+        .prepare(`
+            SELECT
+
+                LOWER(
+                    COALESCE(
+                        severity,
+                        'unknown'
+                    )
+                ) AS severity,
+
+                COUNT(*) AS count
+
+            FROM cyera_alerts
+
+            GROUP BY LOWER(
+                COALESCE(
+                    severity,
+                    'unknown'
+                )
+            )
+
+            ORDER BY count DESC
+        `)
+        .all();
+
+
+    /*
+    ==========================================
+    Purview severity
+    ==========================================
+    */
+
+    const purviewSeverityResult = await env.DB
+        .prepare(`
+            SELECT
+
+                LOWER(
+                    COALESCE(
+                        severity,
+                        'unknown'
+                    )
+                ) AS severity,
+
+                COUNT(*) AS count
+
+            FROM purview_alerts
+
+            GROUP BY LOWER(
+                COALESCE(
+                    severity,
+                    'unknown'
+                )
+            )
+
+            ORDER BY count DESC
+        `)
+        .all();
+
+
+    /*
+    ==========================================
+    Cyera status
+    ==========================================
+    */
+
+    const cyeraStatusResult = await env.DB
+        .prepare(`
+            SELECT
+
+                LOWER(
+                    COALESCE(
+                        status,
+                        'unknown'
+                    )
+                ) AS status,
+
+                COUNT(*) AS count
+
+            FROM cyera_alerts
+
+            GROUP BY LOWER(
+                COALESCE(
+                    status,
+                    'unknown'
+                )
+            )
+
+            ORDER BY count DESC
+        `)
+        .all();
+
+
+    /*
+    ==========================================
+    Purview status
+    ==========================================
+    */
+
+    const purviewStatusResult = await env.DB
+        .prepare(`
+            SELECT
+
+                LOWER(
+                    COALESCE(
+                        status,
+                        'unknown'
+                    )
+                ) AS status,
+
+                COUNT(*) AS count
+
+            FROM purview_alerts
+
+            GROUP BY LOWER(
+                COALESCE(
+                    status,
+                    'unknown'
+                )
+            )
+
+            ORDER BY count DESC
+        `)
+        .all();
+
+
+    /*
+    ==========================================
+    Cyera alerts by assigned user
+    ==========================================
+    */
+
+    const assignedUserResult = await env.DB
+        .prepare(`
+            SELECT
+
+                COALESCE(
+                    assigned_user_email,
+                    'Unassigned'
+                ) AS assigned_user,
+
+                COUNT(*) AS count
+
+            FROM cyera_alerts
+
+            GROUP BY assigned_user_email
+
+            ORDER BY count DESC
+        `)
+        .all();
+
+
+    /*
+    ==========================================
+    Return analytics
+    ==========================================
+    */
+
+    return jsonResponse(
+
+        {
+
+            success: true,
+
+            generatedAt:
+                new Date().toISOString(),
+
+
+            totals: {
+
+                reports:
+                    Number(
+                        totals?.totalReports || 0
+                    ),
+
+                alerts:
+                    Number(
+                        totals?.totalAlerts || 0
+                    ),
+
+                cyera:
+                    Number(
+                        totals?.totalCyeraAlerts || 0
+                    ),
+
+                purview:
+                    Number(
+                        totals?.totalPurviewAlerts || 0
+                    )
+            },
+
+
+            latestReport:
+                latestReport || null,
+
+
+            cyera: {
+
+                severity:
+                    cyeraSeverityResult.results || [],
+
+                status:
+                    cyeraStatusResult.results || [],
+
+                assignedUsers:
+                    assignedUserResult.results || []
+            },
+
+
+            purview: {
+
+                severity:
+                    purviewSeverityResult.results || [],
+
+                status:
+                    purviewStatusResult.results || []
+            }
+
+        },
+
+        200,
+
+        corsHeaders
+    );
+}
 
 /*
 ==========================================
