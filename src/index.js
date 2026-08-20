@@ -61,19 +61,20 @@ export default {
                 corsHeaders
             );
 
-        } catch (error) {
+       } catch (error) {
 
-            console.error(error);
+    console.error("FULL ERROR:", error);
 
-            return jsonResponse(
-                {
-                    success: false,
-                    error: "Internal server error"
-                },
-                500,
-                corsHeaders
-            );
-        }
+    return jsonResponse(
+        {
+            success: false,
+            error: error.message,
+            stack: error.stack
+        },
+        500,
+        corsHeaders
+    );
+}
     }
 };
 
