@@ -983,86 +983,124 @@ async function handleAnalyticsTrends(
     }
 
 
-    /*
-    ==========================================
-    QUARTERLY
-    ==========================================
-    */
+  /*
+==========================================
+QUARTERLY
+==========================================
+*/
 
-    if (period === "quarterly") {
+if (period === "quarterly") {
 
-        const result =
-            await env.DB
-                .prepare(`
-                    SELECT
-                        (
-                            substr(report_date, 1, 4)
-                            || '-Q'
-                            ||
-                            (
-                                CAST(
-                                    substr(report_date, 5, 2)
-                                    AS INTEGER
-                                ) + 2
-                            ) / 3
-                        ) AS quarter,
+    const result =
+        await env.DB
+            .prepare(`
+                SELECT
+                    substr(report_date, 1, 4) AS year,
 
-                        SUM(total_alerts) AS total,
+                    CASE
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 1 AND 3
+                            THEN 'Q1'
 
-                        SUM(cyera_count) AS cyera,
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 4 AND 6
+                            THEN 'Q2'
 
-                        SUM(purview_count) AS purview
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 7 AND 9
+                            THEN 'Q3'
 
-                    FROM reports
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 10 AND 12
+                            THEN 'Q4'
+                    END AS quarter,
 
-                    GROUP BY
-                        substr(report_date, 1, 4),
-                        (
-                            CAST(
-                                substr(report_date, 5, 2)
-                                AS INTEGER
-                            ) + 2
-                        ) / 3
+                    SUM(total_alerts) AS total,
 
-                    ORDER BY quarter ASC
-                `)
-                .all();
+                    SUM(cyera_count) AS cyera,
+
+                    SUM(purview_count) AS purview
+
+                FROM reports
+
+                GROUP BY
+                    substr(report_date, 1, 4),
+
+                    CASE
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 1 AND 3
+                            THEN 'Q1'
+
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 4 AND 6
+                            THEN 'Q2'
+
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 7 AND 9
+                            THEN 'Q3'
+
+                        WHEN CAST(
+                            substr(report_date, 5, 2)
+                            AS INTEGER
+                        ) BETWEEN 10 AND 12
+                            THEN 'Q4'
+                    END
+
+                ORDER BY
+                    year ASC,
+                    quarter ASC
+            `)
+            .all();
 
 
-        return jsonResponse(
-            {
-                success: true,
+    return jsonResponse(
+        {
+            success: true,
 
-                period: "quarterly",
+            period: "quarterly",
 
-                data:
-                    (result.results || [])
-                        .map(row => ({
-                            quarter:
-                                row.quarter,
+            data:
+                (result.results || [])
+                    .map(row => ({
 
-                            total:
-                                Number(
-                                    row.total || 0
-                                ),
+                        quarter:
+                            `${row.year}-${row.quarter}`,
 
-                            cyera:
-                                Number(
-                                    row.cyera || 0
-                                ),
+                        total:
+                            Number(
+                                row.total || 0
+                            ),
 
-                            purview:
-                                Number(
-                                    row.purview || 0
-                                )
-                        }))
-            },
+                        cyera:
+                            Number(
+                                row.cyera || 0
+                            ),
 
-            200,
+                        purview:
+                            Number(
+                                row.purview || 0
+                            )
+                    }))
+        },
 
-            corsHeaders
-        );
-    }
+        200,
+
+        corsHeaders
+    );
 }
 /*
 ==========================================
