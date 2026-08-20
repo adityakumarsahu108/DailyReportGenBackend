@@ -73,7 +73,24 @@ export default {
                     corsHeaders
                 );
             }
+            // Get report details
+            if (
+                request.method === "GET" &&
+                url.pathname.startsWith("/api/v1/reports/")
+            ) {
 
+                const reportId =
+                    decodeURIComponent(
+                        url.pathname.split("/").pop()
+                    );
+
+                return await handleGetReport(
+                    reportId,
+                    url,
+                    env,
+                    corsHeaders
+                );
+            }
             return jsonResponse(
                 {
                     success: false,
@@ -766,6 +783,303 @@ async function handleAnalyticsTrends(
 
             trends:
                 result.results || []
+        },
+
+        200,
+
+        corsHeaders
+    );
+}
+
+/*
+==========================================
+GET REPORT DETAILS
+==========================================
+*/
+
+async function handleGetReport(
+    reportId,
+    url,
+    env,
+    corsHeaders
+) {
+
+    /*
+    ==========================================
+    Query parameters
+    ==========================================
+    */
+
+    const source =
+        url.searchParams.get("source");
+
+    const severity =
+        url.searchParams.get("severity");
+
+    const status =
+        url.searchParams.get("status");
+
+    const assignedUser =
+        url.searchParams.get("assignedUser");
+
+
+    /*
+    ==========================================
+    Get report
+    ==========================================
+    */
+
+    const report = await env.DB
+        .prepare(`
+            SELECT
+
+                report_id,
+                report_date,
+                cyera_count,
+                purview_count,
+                total_alerts,
+                generated_at
+
+            FROM reports
+
+            WHERE report_id = ?
+
+            LIMIT 1
+        `)
+        .bind(reportId)
+        .first();
+
+
+    /*
+    ==========================================
+    Report not found
+    ==========================================
+    */
+
+    if (!report) {
+
+        return jsonResponse(
+            {
+                success: false,
+                error: "Report not found"
+            },
+            404,
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    Build Cyera query
+    ==========================================
+    */
+
+    let cyeraQuery = `
+        SELECT *
+
+        FROM cyera_alerts
+
+        WHERE report_id = ?
+    `;
+
+    const cyeraParams = [reportId];
+
+
+    if (severity) {
+
+        cyeraQuery += `
+            AND LOWER(severity) = LOWER(?)
+        `;
+
+        cyeraParams.push(severity);
+    }
+
+
+    if (status) {
+
+        cyeraQuery += `
+            AND LOWER(status) = LOWER(?)
+        `;
+
+        cyeraParams.push(status);
+    }
+
+
+    if (assignedUser) {
+
+        if (
+            assignedUser.toLowerCase() ===
+            "unassigned"
+        ) {
+
+            cyeraQuery += `
+                AND assigned_user_email IS NULL
+            `;
+
+        } else {
+
+            cyeraQuery += `
+                AND LOWER(
+                    assigned_user_email
+                ) = LOWER(?)
+            `;
+
+            cyeraParams.push(
+                assignedUser
+            );
+        }
+    }
+
+
+    cyeraQuery += `
+        ORDER BY timestamp DESC
+    `;
+
+
+    /*
+    ==========================================
+    Build Purview query
+    ==========================================
+    */
+
+    let purviewQuery = `
+        SELECT *
+
+        FROM purview_alerts
+
+        WHERE report_id = ?
+    `;
+
+    const purviewParams = [reportId];
+
+
+    if (severity) {
+
+        purviewQuery += `
+            AND LOWER(severity) = LOWER(?)
+        `;
+
+        purviewParams.push(severity);
+    }
+
+
+    if (status) {
+
+        purviewQuery += `
+            AND LOWER(status) = LOWER(?)
+        `;
+
+        purviewParams.push(status);
+    }
+
+
+    purviewQuery += `
+        ORDER BY timestamp DESC
+    `;
+
+
+    /*
+    ==========================================
+    Execute queries
+    ==========================================
+    */
+
+    let cyera = [];
+    let purview = [];
+
+
+    if (
+        !source ||
+        source.toLowerCase() === "cyera"
+    ) {
+
+        const result =
+            await env.DB
+                .prepare(cyeraQuery)
+                .bind(...cyeraParams)
+                .all();
+
+        cyera =
+            result.results || [];
+    }
+
+
+    if (
+        !source ||
+        source.toLowerCase() === "purview"
+    ) {
+
+        const result =
+            await env.DB
+                .prepare(purviewQuery)
+                .bind(...purviewParams)
+                .all();
+
+        purview =
+            result.results || [];
+    }
+
+
+    /*
+    ==========================================
+    Invalid source
+    ==========================================
+    */
+
+    if (
+        source &&
+        source.toLowerCase() !== "cyera" &&
+        source.toLowerCase() !== "purview"
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+                error:
+                    "Invalid source. Use cyera or purview."
+            },
+            400,
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    Return report
+    ==========================================
+    */
+
+    return jsonResponse(
+        {
+            success: true,
+
+            report: report,
+
+            filters: {
+                source:
+                    source || null,
+
+                severity:
+                    severity || null,
+
+                status:
+                    status || null,
+
+                assignedUser:
+                    assignedUser || null
+            },
+
+            cyera: {
+                count: cyera.length,
+                alerts: cyera
+            },
+
+            purview: {
+                count: purview.length,
+                alerts: purview
+            }
         },
 
         200,
