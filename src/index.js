@@ -932,10 +932,6 @@ async function handleGetReport(
     }
 
 
-    cyeraQuery += `
-        ORDER BY timestamp DESC
-    `;
-
 
     /*
     ==========================================
@@ -974,9 +970,6 @@ async function handleGetReport(
     }
 
 
-    purviewQuery += `
-        ORDER BY timestamp DESC
-    `;
 
 
     /*
