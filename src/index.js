@@ -797,31 +797,18 @@ GET REPORT DETAILS
 ==========================================
 */
 
+/*
+==========================================
+GET REPORT SUMMARY
+==========================================
+*/
+
 async function handleGetReport(
     reportId,
     url,
     env,
     corsHeaders
 ) {
-
-    /*
-    ==========================================
-    Query parameters
-    ==========================================
-    */
-
-    const source =
-        url.searchParams.get("source");
-
-    const severity =
-        url.searchParams.get("severity");
-
-    const status =
-        url.searchParams.get("status");
-
-    const assignedUser =
-        url.searchParams.get("assignedUser");
-
 
     /*
     ==========================================
@@ -832,18 +819,14 @@ async function handleGetReport(
     const report = await env.DB
         .prepare(`
             SELECT
-
                 report_id,
                 report_date,
                 cyera_count,
                 purview_count,
                 total_alerts,
                 generated_at
-
             FROM reports
-
             WHERE report_id = ?
-
             LIMIT 1
         `)
         .bind(reportId)
@@ -871,66 +854,197 @@ async function handleGetReport(
 
     /*
     ==========================================
-    Build Cyera query
+    Cyera severity
     ==========================================
     */
 
-    let cyeraQuery = `
-        SELECT *
-
-        FROM cyera_alerts
-
-        WHERE report_id = ?
-    `;
-
-    const cyeraParams = [reportId];
-
-
-    if (severity) {
-
-        cyeraQuery += `
-            AND LOWER(severity) = LOWER(?)
-        `;
-
-        cyeraParams.push(severity);
-    }
-
-
-    if (status) {
-
-        cyeraQuery += `
-            AND LOWER(status) = LOWER(?)
-        `;
-
-        cyeraParams.push(status);
-    }
+    const cyeraSeverity =
+        await env.DB
+            .prepare(`
+                SELECT
+                    LOWER(
+                        COALESCE(
+                            severity,
+                            'unknown'
+                        )
+                    ) AS severity,
+                    COUNT(*) AS count
+                FROM cyera_alerts
+                WHERE report_id = ?
+                GROUP BY LOWER(
+                    COALESCE(
+                        severity,
+                        'unknown'
+                    )
+                )
+            `)
+            .bind(reportId)
+            .all();
 
 
-    if (assignedUser) {
+    /*
+    ==========================================
+    Cyera status
+    ==========================================
+    */
 
-        if (
-            assignedUser.toLowerCase() ===
-            "unassigned"
-        ) {
+    const cyeraStatus =
+        await env.DB
+            .prepare(`
+                SELECT
+                    LOWER(
+                        COALESCE(
+                            status,
+                            'unknown'
+                        )
+                    ) AS status,
+                    COUNT(*) AS count
+                FROM cyera_alerts
+                WHERE report_id = ?
+                GROUP BY LOWER(
+                    COALESCE(
+                        status,
+                        'unknown'
+                    )
+                )
+            `)
+            .bind(reportId)
+            .all();
 
-            cyeraQuery += `
-                AND assigned_user_email IS NULL
-            `;
 
-        } else {
+    /*
+    ==========================================
+    Cyera assigned users
+    ==========================================
+    */
 
-            cyeraQuery += `
-                AND LOWER(
-                    assigned_user_email
-                ) = LOWER(?)
-            `;
+    const cyeraAssignedUsers =
+        await env.DB
+            .prepare(`
+                SELECT
+                    COALESCE(
+                        assigned_user_email,
+                        'Unassigned'
+                    ) AS assigned_user,
+                    COUNT(*) AS count
+                FROM cyera_alerts
+                WHERE report_id = ?
+                GROUP BY assigned_user_email
+                ORDER BY count DESC
+            `)
+            .bind(reportId)
+            .all();
 
-            cyeraParams.push(
-                assignedUser
-            );
-        }
-    }
 
+    /*
+    ==========================================
+    Purview severity
+    ==========================================
+    */
+
+    const purviewSeverity =
+        await env.DB
+            .prepare(`
+                SELECT
+                    LOWER(
+                        COALESCE(
+                            severity,
+                            'unknown'
+                        )
+                    ) AS severity,
+                    COUNT(*) AS count
+                FROM purview_alerts
+                WHERE report_id = ?
+                GROUP BY LOWER(
+                    COALESCE(
+                        severity,
+                        'unknown'
+                    )
+                )
+            `)
+            .bind(reportId)
+            .all();
+
+
+    /*
+    ==========================================
+    Purview status
+    ==========================================
+    */
+
+    const purviewStatus =
+        await env.DB
+            .prepare(`
+                SELECT
+                    LOWER(
+                        COALESCE(
+                            status,
+                            'unknown'
+                        )
+                    ) AS status,
+                    COUNT(*) AS count
+                FROM purview_alerts
+                WHERE report_id = ?
+                GROUP BY LOWER(
+                    COALESCE(
+                        status,
+                        'unknown'
+                    )
+                )
+            `)
+            .bind(reportId)
+            .all();
+
+
+    /*
+    ==========================================
+    Return summary only
+    ==========================================
+    */
+
+    return jsonResponse(
+        {
+            success: true,
+
+            report: report,
+
+            cyera: {
+
+                count:
+                    Number(
+                        report.cyera_count || 0
+                    ),
+
+                severity:
+                    cyeraSeverity.results || [],
+
+                status:
+                    cyeraStatus.results || [],
+
+                assignedUsers:
+                    cyeraAssignedUsers.results || []
+            },
+
+            purview: {
+
+                count:
+                    Number(
+                        report.purview_count || 0
+                    ),
+
+                severity:
+                    purviewSeverity.results || [],
+
+                status:
+                    purviewStatus.results || []
+            }
+        },
+
+        200,
+
+        corsHeaders
+    );
+}
 
 
     /*
@@ -1079,7 +1193,7 @@ async function handleGetReport(
 
         corsHeaders
     );
-}
+
 /*
 ==========================================
 VALIDATION
