@@ -7,6 +7,18 @@ binding = "DB"
 database_name = "daily-report-db"
 database_id = "36c03576-19ae-46f4-a4f1-357afd7b99ac"
 
-[observability.logs]
+[observability]
 enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
 invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
