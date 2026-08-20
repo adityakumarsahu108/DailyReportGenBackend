@@ -61,24 +61,11 @@ export default {
                 corsHeaders
             );
 
-     } catch (error) {
+ } catch (error) {
 
     console.error(
-        "WORKER ERROR OBJECT:",
+        "Worker error:",
         error
-    );
-
-    console.error(
-        "WORKER ERROR STRING:",
-        String(error)
-    );
-
-    console.error(
-        "WORKER ERROR JSON:",
-        JSON.stringify(
-            error,
-            Object.getOwnPropertyNames(error)
-        )
     );
 
     return jsonResponse(
@@ -87,21 +74,7 @@ export default {
 
             error:
                 error?.message ||
-                String(error),
-
-            errorName:
-                error?.name ||
-                null,
-
-            errorDetails:
-                JSON.stringify(
-                    error,
-                    Object.getOwnPropertyNames(error)
-                ),
-
-            stack:
-                error?.stack ||
-                null
+                String(error)
         },
 
         500,
