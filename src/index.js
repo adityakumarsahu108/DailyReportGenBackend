@@ -1,96 +1,47 @@
-/*
-==========================================
-Daily Report API
-Cloudflare Worker
-==========================================
-*/
-
-
 export default {
 
     async fetch(request, env) {
 
-        const url =
-            new URL(request.url);
-
-
-        /*
-        ==========================================
-        CORS
-        ==========================================
-        */
+        const url = new URL(request.url);
 
         const corsHeaders = {
-
             "Access-Control-Allow-Origin": "*",
-
-            "Access-Control-Allow-Methods":
-                "GET, POST, OPTIONS",
-
-            "Access-Control-Allow-Headers":
-                "Content-Type, Authorization"
-
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
         };
 
-
-        /*
-        ==========================================
-        OPTIONS / CORS preflight
-        ==========================================
-        */
-
+        // CORS preflight
         if (request.method === "OPTIONS") {
-
-            return new Response(
-                null,
-                {
-                    status: 204,
-                    headers: corsHeaders
-                }
-            );
-
+            return new Response(null, {
+                status: 204,
+                headers: corsHeaders
+            });
         }
-
 
         try {
 
-            /*
-            ==========================================
-            Health Check
-            ==========================================
-            */
-
+            // Health check
             if (
-                url.pathname ===
-                "/api/v1/health"
+                request.method === "GET" &&
+                url.pathname === "/api/v1/health"
             ) {
 
                 return jsonResponse(
-
                     {
                         success: true,
                         service: "daily-report-api",
                         database: "connected"
                     },
-
                     200,
                     corsHeaders
-
                 );
-
             }
 
 
-            /*
-            ==========================================
-            POST /api/v1/reports
-            ==========================================
-            */
-
+            // Create daily report
             if (
                 request.method === "POST" &&
-                url.pathname ===
-                "/api/v1/reports"
+                url.pathname === "/api/v1/reports"
             ) {
 
                 return await handleCreateReport(
@@ -98,58 +49,38 @@ export default {
                     env,
                     corsHeaders
                 );
-
             }
 
 
-            /*
-            ==========================================
-            Unknown Route
-            ==========================================
-            */
-
             return jsonResponse(
-
                 {
                     success: false,
                     error: "Route not found"
                 },
-
                 404,
                 corsHeaders
-
             );
-
 
         } catch (error) {
 
-            console.error(
-                "Worker error:",
-                error
-            );
+            console.error(error);
 
             return jsonResponse(
-
                 {
                     success: false,
                     error: "Internal server error"
                 },
-
                 500,
                 corsHeaders
-
             );
-
         }
-
     }
-
 };
 
 
 /*
 ==========================================
-Create Report
+CREATE REPORT
 ==========================================
 */
 
@@ -159,117 +90,44 @@ async function handleCreateReport(
     corsHeaders
 ) {
 
-    /*
-    ==========================================
-    Parse JSON
-    ==========================================
-    */
-
     let data;
 
     try {
 
-        data =
-            await request.json();
+        data = await request.json();
 
-    } catch (error) {
+    } catch {
 
         return jsonResponse(
-
             {
                 success: false,
                 error: "Invalid JSON payload"
             },
-
             400,
             corsHeaders
-
         );
-
     }
 
 
-    /*
-    ==========================================
-    Validate payload
-    ==========================================
-    */
-
-    const validation =
-        validateReport(data);
+    // Validate
+    const validation = validateReport(data);
 
     if (!validation.valid) {
 
         return jsonResponse(
-
             {
                 success: false,
                 error: validation.error
             },
-
             400,
             corsHeaders
-
         );
-
     }
 
 
-    const report =
-        data.report;
+    const report = data.report;
 
-    const reportId =
-        report.reportId;
-
-
-    /*
-    ==========================================
-    Duplicate Protection
-    ==========================================
-    */
-
-    const existing =
-        await env.DB
-            .prepare(
-                `
-                SELECT report_id
-                FROM reports
-                WHERE report_id = ?
-                `
-            )
-            .bind(reportId)
-            .first();
-
-
-    if (existing) {
-
-        return jsonResponse(
-
-            {
-                success: true,
-
-                duplicate: true,
-
-                reportId,
-
-                message:
-                    "Report already exists"
-
-            },
-
-            200,
-            corsHeaders
-
-        );
-
-    }
-
-
-    /*
-    ==========================================
-    Extract records
-    ==========================================
-    */
+    const reportId = report.reportId;
 
     const cyeraRecords =
         data.cyera?.records || [];
@@ -280,13 +138,43 @@ async function handleCreateReport(
 
     /*
     ==========================================
-    Insert report
+    CHECK DUPLICATE
+    ==========================================
+    */
+
+    const existing = await env.DB
+        .prepare(`
+            SELECT report_id
+            FROM reports
+            WHERE report_id = ?
+        `)
+        .bind(reportId)
+        .first();
+
+
+    if (existing) {
+
+        return jsonResponse(
+            {
+                success: true,
+                duplicate: true,
+                reportId,
+                message: "Report already exists"
+            },
+            200,
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    INSERT REPORT
     ==========================================
     */
 
     await env.DB
-        .prepare(
-            `
+        .prepare(`
             INSERT INTO reports (
                 report_id,
                 report_date,
@@ -301,51 +189,33 @@ async function handleCreateReport(
             )
 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `
-        )
+        `)
         .bind(
-
             reportId,
-
             report.reportDate,
-
-            report.reportingWindow?.from ||
-                null,
-
-            report.reportingWindow?.to ||
-                null,
-
-            report.generatedAt ||
-                null,
-
-            report.generatorVersion ||
-                null,
-
-            data.schemaVersion ||
-                null,
-
+            report.reportingWindow?.from || null,
+            report.reportingWindow?.to || null,
+            report.generatedAt || null,
+            report.generatorVersion || null,
+            data.schemaVersion || null,
             cyeraRecords.length,
-
             purviewRecords.length,
-
             cyeraRecords.length +
-            purviewRecords.length
-
+                purviewRecords.length
         )
         .run();
 
 
     /*
     ==========================================
-    Insert Cyera Alerts
+    INSERT CYERA
     ==========================================
     */
 
     for (const alert of cyeraRecords) {
 
         await env.DB
-            .prepare(
-                `
+            .prepare(`
                 INSERT INTO cyera_alerts (
 
                     report_id,
@@ -389,8 +259,7 @@ async function handleCreateReport(
                     ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?
                 )
-                `
-            )
+            `)
             .bind(
 
                 reportId,
@@ -426,24 +295,21 @@ async function handleCreateReport(
                 alert.configuredAction || null,
 
                 alert.dataType || null
-
             )
             .run();
-
     }
 
 
     /*
     ==========================================
-    Insert Purview Alerts
+    INSERT PURVIEW
     ==========================================
     */
 
     for (const alert of purviewRecords) {
 
         await env.DB
-            .prepare(
-                `
+            .prepare(`
                 INSERT INTO purview_alerts (
 
                     report_id,
@@ -460,8 +326,7 @@ async function handleCreateReport(
                 )
 
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                `
-            )
+            `)
             .bind(
 
                 reportId,
@@ -480,24 +345,19 @@ async function handleCreateReport(
 
             )
             .run();
-
     }
 
 
     /*
     ==========================================
-    Success
+    SUCCESS
     ==========================================
     */
 
     return jsonResponse(
-
         {
-
             success: true,
-
             duplicate: false,
-
             reportId,
 
             cyeraInserted:
@@ -509,21 +369,16 @@ async function handleCreateReport(
             totalInserted:
                 cyeraRecords.length +
                 purviewRecords.length
-
         },
-
         201,
-
         corsHeaders
-
     );
-
 }
 
 
 /*
 ==========================================
-Payload Validation
+VALIDATION
 ==========================================
 */
 
@@ -535,7 +390,6 @@ function validateReport(data) {
             valid: false,
             error: "Request body is empty"
         };
-
     }
 
 
@@ -545,7 +399,6 @@ function validateReport(data) {
             valid: false,
             error: "Missing report object"
         };
-
     }
 
 
@@ -555,7 +408,6 @@ function validateReport(data) {
             valid: false,
             error: "Missing report.reportId"
         };
-
     }
 
 
@@ -565,7 +417,6 @@ function validateReport(data) {
             valid: false,
             error: "Missing report.reportDate"
         };
-
     }
 
 
@@ -576,10 +427,8 @@ function validateReport(data) {
 
         return {
             valid: false,
-            error:
-                "cyera.records must be an array"
+            error: "cyera.records must be an array"
         };
-
     }
 
 
@@ -590,23 +439,20 @@ function validateReport(data) {
 
         return {
             valid: false,
-            error:
-                "purview.records must be an array"
+            error: "purview.records must be an array"
         };
-
     }
 
 
     return {
         valid: true
     };
-
 }
 
 
 /*
 ==========================================
-JSON Response Helper
+JSON RESPONSE
 ==========================================
 */
 
@@ -618,27 +464,17 @@ function jsonResponse(
 
     return new Response(
 
-        JSON.stringify(
-            data,
-            null,
-            2
-        ),
+        JSON.stringify(data, null, 2),
 
         {
-
             status,
 
             headers: {
-
                 "Content-Type":
                     "application/json",
 
                 ...additionalHeaders
-
             }
-
         }
-
     );
-
 }
