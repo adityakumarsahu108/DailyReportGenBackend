@@ -72,6 +72,7 @@ export default {
             ) {
 
                 return await handleAnalyticsTrends(
+                    url,
                     env,
                     corsHeaders
                 );
@@ -808,45 +809,261 @@ ANALYTICS TRENDS
 ==========================================
 */
 
+/*
+==========================================
+ANALYTICS TRENDS
+==========================================
+*/
+
 async function handleAnalyticsTrends(
+    url,
     env,
     corsHeaders
 ) {
 
-    const result = await env.DB
-        .prepare(`
-            SELECT
+    /*
+    ==========================================
+    Period
+    ==========================================
+    */
 
-                report_date AS date,
-
-                cyera_count AS cyera,
-
-                purview_count AS purview,
-
-                total_alerts AS total
-
-            FROM reports
-
-            ORDER BY report_date ASC
-        `)
-        .all();
+    const period =
+        (
+            url.searchParams.get("period") ||
+            "daily"
+        ).toLowerCase();
 
 
-    return jsonResponse(
+    /*
+    ==========================================
+    Validate period
+    ==========================================
+    */
 
-        {
-            success: true,
+    const allowedPeriods = [
+        "daily",
+        "monthly",
+        "quarterly"
+    ];
 
-            trends:
-                result.results || []
-        },
+    if (
+        !allowedPeriods.includes(period)
+    ) {
 
-        200,
+        return jsonResponse(
+            {
+                success: false,
 
-        corsHeaders
-    );
+                error:
+                    "Invalid period. Use daily, monthly, or quarterly."
+            },
+
+            400,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    DAILY
+    ==========================================
+    */
+
+    if (period === "daily") {
+
+        const result =
+            await env.DB
+                .prepare(`
+                    SELECT
+                        report_date AS date,
+                        SUM(total_alerts) AS total,
+                        SUM(cyera_count) AS cyera,
+                        SUM(purview_count) AS purview
+                    FROM reports
+                    GROUP BY report_date
+                    ORDER BY report_date ASC
+                `)
+                .all();
+
+
+        return jsonResponse(
+            {
+                success: true,
+
+                period: "daily",
+
+                data:
+                    (result.results || [])
+                        .map(row => ({
+                            date:
+                                row.date,
+
+                            total:
+                                Number(
+                                    row.total || 0
+                                ),
+
+                            cyera:
+                                Number(
+                                    row.cyera || 0
+                                ),
+
+                            purview:
+                                Number(
+                                    row.purview || 0
+                                )
+                        }))
+            },
+
+            200,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    MONTHLY
+    ==========================================
+    */
+
+    if (period === "monthly") {
+
+        const result =
+            await env.DB
+                .prepare(`
+                    SELECT
+                        substr(report_date, 1, 6) AS month,
+                        SUM(total_alerts) AS total,
+                        SUM(cyera_count) AS cyera,
+                        SUM(purview_count) AS purview
+                    FROM reports
+                    GROUP BY substr(report_date, 1, 6)
+                    ORDER BY month ASC
+                `)
+                .all();
+
+
+        return jsonResponse(
+            {
+                success: true,
+
+                period: "monthly",
+
+                data:
+                    (result.results || [])
+                        .map(row => ({
+                            month:
+                                row.month,
+
+                            total:
+                                Number(
+                                    row.total || 0
+                                ),
+
+                            cyera:
+                                Number(
+                                    row.cyera || 0
+                                ),
+
+                            purview:
+                                Number(
+                                    row.purview || 0
+                                )
+                        }))
+            },
+
+            200,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    QUARTERLY
+    ==========================================
+    */
+
+    if (period === "quarterly") {
+
+        const result =
+            await env.DB
+                .prepare(`
+                    SELECT
+                        (
+                            substr(report_date, 1, 4)
+                            || '-Q'
+                            ||
+                            (
+                                CAST(
+                                    substr(report_date, 5, 2)
+                                    AS INTEGER
+                                ) + 2
+                            ) / 3
+                        ) AS quarter,
+
+                        SUM(total_alerts) AS total,
+
+                        SUM(cyera_count) AS cyera,
+
+                        SUM(purview_count) AS purview
+
+                    FROM reports
+
+                    GROUP BY
+                        substr(report_date, 1, 4),
+                        (
+                            CAST(
+                                substr(report_date, 5, 2)
+                                AS INTEGER
+                            ) + 2
+                        ) / 3
+
+                    ORDER BY quarter ASC
+                `)
+                .all();
+
+
+        return jsonResponse(
+            {
+                success: true,
+
+                period: "quarterly",
+
+                data:
+                    (result.results || [])
+                        .map(row => ({
+                            quarter:
+                                row.quarter,
+
+                            total:
+                                Number(
+                                    row.total || 0
+                                ),
+
+                            cyera:
+                                Number(
+                                    row.cyera || 0
+                                ),
+
+                            purview:
+                                Number(
+                                    row.purview || 0
+                                )
+                        }))
+            },
+
+            200,
+
+            corsHeaders
+        );
+    }
 }
-
 /*
 ==========================================
 GET REPORT DETAILS
