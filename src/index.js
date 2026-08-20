@@ -71,19 +71,27 @@ export default {
                 corsHeaders
             );
 
-        } catch (error) {
+ } catch (error) {
 
-            console.error(error);
+    console.error(
+        "Worker error:",
+        error
+    );
 
-            return jsonResponse(
-                {
-                    success: false,
-                    error: "Internal server error"
-                },
-                500,
-                corsHeaders
-            );
-        }
+    return jsonResponse(
+        {
+            success: false,
+
+            error:
+                error?.message ||
+                String(error)
+        },
+
+        500,
+
+        corsHeaders
+    );
+}
     }
 };
 
@@ -222,7 +230,16 @@ async function handleCreateReport(
     ==========================================
     */
 
-    for (const alert of cyeraRecords) {
+   for (let i = 0; i < cyeraRecords.length; i++) {
+
+    const alert = cyeraRecords[i];
+
+    console.log(
+        `Processing Cyera alert ${i + 1}/${cyeraRecords.length}`,
+        alert.id
+    );
+
+    try {
 
         await env.DB
             .prepare(`
@@ -267,7 +284,7 @@ async function handleCreateReport(
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?
                 )
             `)
             .bind(
@@ -305,10 +322,24 @@ async function handleCreateReport(
                 alert.configuredAction || null,
 
                 alert.dataType || null
+
             )
             .run();
-    }
 
+    } catch (error) {
+
+        console.error(
+            `CYERA INSERT FAILED AT RECORD ${i + 1}`,
+            {
+                alertId: alert.id,
+                alertName: alert.name,
+                error: String(error)
+            }
+        );
+
+        throw error;
+    }
+}
 
     /*
     ==========================================
