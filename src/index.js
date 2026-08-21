@@ -1402,6 +1402,400 @@ async function handleAnalyticsTrends(
 GET REPORT DETAILS
 ==========================================
 */
+
+/*
+==========================================
+GET REPORTS
+==========================================
+
+GET /api/v1/reports
+GET /api/v1/reports?page=1&limit=30
+GET /api/v1/reports?page=1&limit=30&from=20260801&to=20260831
+
+Supports:
+
+- Pagination
+- Date range filtering
+- Safe limit of 100 records
+- Total count
+- Total pages
+- Next/previous page information
+==========================================
+*/
+
+async function handleGetReports(
+    url,
+    env,
+    corsHeaders
+) {
+
+    /*
+    ==========================================
+    PAGINATION
+    ==========================================
+    */
+
+    let page =
+        parseInt(
+            url.searchParams.get("page") || "1",
+            10
+        );
+
+    let limit =
+        parseInt(
+            url.searchParams.get("limit") || "30",
+            10
+        );
+
+
+    /*
+    ==========================================
+    VALIDATE PAGINATION
+    ==========================================
+    */
+
+    if (
+        !Number.isInteger(page) ||
+        page < 1
+    ) {
+        page = 1;
+    }
+
+
+    if (
+        !Number.isInteger(limit) ||
+        limit < 1
+    ) {
+        limit = 30;
+    }
+
+
+    // Prevent very large requests
+    limit = Math.min(limit, 100);
+
+
+    const offset =
+        (page - 1) * limit;
+
+
+    /*
+    ==========================================
+    DATE FILTERS
+    ==========================================
+    
+    Supported:
+
+    ?from=20260801
+    ?to=20260831
+
+    or:
+
+    ?from=20260801&to=20260831
+    ==========================================
+    */
+
+    const from =
+        url.searchParams.get("from");
+
+    const to =
+        url.searchParams.get("to");
+
+
+    /*
+    ==========================================
+    VALIDATE DATES
+    ==========================================
+    */
+
+    if (
+        (from && !/^\d{8}$/.test(from)) ||
+        (to && !/^\d{8}$/.test(to))
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+
+                error:
+                    "Invalid date format. Use YYYYMMDD."
+            },
+
+            400,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    VALIDATE DATE RANGE
+    ==========================================
+    */
+
+    if (
+        from &&
+        to &&
+        from > to
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+
+                error:
+                    "'from' date cannot be greater than 'to' date."
+            },
+
+            400,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    BUILD WHERE CLAUSE
+    ==========================================
+    */
+
+    let whereClause = "";
+
+    const filterBindings = [];
+
+
+    /*
+    FROM DATE
+    */
+
+    if (from) {
+
+        whereClause += `
+            report_date >= ?
+        `;
+
+        filterBindings.push(from);
+    }
+
+
+    /*
+    TO DATE
+    */
+
+    if (to) {
+
+        if (from) {
+
+            whereClause += `
+                AND report_date <= ?
+            `;
+
+        } else {
+
+            whereClause += `
+                report_date <= ?
+            `;
+        }
+
+        filterBindings.push(to);
+    }
+
+
+    /*
+    ==========================================
+    FINAL WHERE SQL
+    ==========================================
+    */
+
+    const whereSQL =
+        whereClause
+            ? `WHERE ${whereClause}`
+            : "";
+
+
+    /*
+    ==========================================
+    GET TOTAL COUNT
+    ==========================================
+    */
+
+    const countResult =
+        await env.DB
+            .prepare(`
+                SELECT
+                    COUNT(*) AS total
+
+                FROM reports
+
+                ${whereSQL}
+            `)
+            .bind(
+                ...filterBindings
+            )
+            .first();
+
+
+    const total =
+        Number(
+            countResult?.total || 0
+        );
+
+
+    /*
+    ==========================================
+    CALCULATE TOTAL PAGES
+    ==========================================
+    */
+
+    const totalPages =
+        total === 0
+            ? 0
+            : Math.ceil(
+                total / limit
+            );
+
+
+    /*
+    ==========================================
+    GET REPORTS
+    ==========================================
+    */
+
+    const reportResult =
+        await env.DB
+            .prepare(`
+                SELECT
+
+                    report_id,
+
+                    report_date,
+
+                    cyera_count,
+
+                    purview_count,
+
+                    total_alerts,
+
+                    generated_at
+
+                FROM reports
+
+                ${whereSQL}
+
+                ORDER BY
+                    report_date DESC
+
+                LIMIT ?
+
+                OFFSET ?
+            `)
+            .bind(
+                ...filterBindings,
+                limit,
+                offset
+            )
+            .all();
+
+
+    /*
+    ==========================================
+    FORMAT REPORTS
+    ==========================================
+    */
+
+    const reports =
+        (reportResult.results || [])
+            .map(row => ({
+
+                reportId:
+                    row.report_id,
+
+                reportDate:
+                    row.report_date,
+
+                cyera:
+                    Number(
+                        row.cyera_count || 0
+                    ),
+
+                purview:
+                    Number(
+                        row.purview_count || 0
+                    ),
+
+                total:
+                    Number(
+                        row.total_alerts || 0
+                    ),
+
+                generatedAt:
+                    row.generated_at
+
+            }));
+
+
+    /*
+    ==========================================
+    RESPONSE
+    ==========================================
+    */
+
+    return jsonResponse(
+        {
+
+            success: true,
+
+            pagination: {
+
+                page,
+
+                limit,
+
+                total,
+
+                totalPages,
+
+                hasNextPage:
+                    page < totalPages,
+
+                hasPreviousPage:
+                    page > 1 &&
+                    totalPages > 0
+
+            },
+
+            /*
+            Only include dateRange when
+            a date filter was actually used.
+            */
+
+            ...(from || to
+                ? {
+
+                    dateRange: {
+
+                        from:
+                            from || null,
+
+                        to:
+                            to || null
+
+                    }
+
+                }
+                : {}),
+
+            data:
+                reports
+
+        },
+
+        200,
+
+        corsHeaders
+    );
+}
 /*
 ==========================================
 GET REPORT SUMMARY
