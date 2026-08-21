@@ -836,6 +836,27 @@ async function handleAnalyticsTrends(
 
     /*
     ==========================================
+    Date Range
+    ==========================================
+    
+    Optional:
+
+    ?from=20260801&to=20260821
+
+    If from/to are not provided,
+    all available reports are returned.
+    ==========================================
+    */
+
+    const from =
+        url.searchParams.get("from");
+
+    const to =
+        url.searchParams.get("to");
+
+
+    /*
+    ==========================================
     Validate period
     ==========================================
     */
@@ -867,6 +888,93 @@ async function handleAnalyticsTrends(
 
     /*
     ==========================================
+    Validate date range
+    ==========================================
+    */
+
+    if (
+        (from && !/^\d{8}$/.test(from)) ||
+        (to && !/^\d{8}$/.test(to))
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+
+                error:
+                    "Invalid date format. Use YYYYMMDD."
+            },
+
+            400,
+
+            corsHeaders
+        );
+    }
+
+
+    if (
+        from &&
+        to &&
+        from > to
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+
+                error:
+                    "'from' date cannot be greater than 'to' date."
+            },
+
+            400,
+
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
+    Build Date Filter
+    ==========================================
+    */
+
+    let dateFilter = "";
+
+    const bindings = [];
+
+
+    if (from) {
+
+        dateFilter += `
+            report_date >= ?
+        `;
+
+        bindings.push(from);
+    }
+
+
+    if (to) {
+
+        if (from) {
+
+            dateFilter += `
+                AND report_date <= ?
+            `;
+
+        } else {
+
+            dateFilter += `
+                report_date <= ?
+            `;
+        }
+
+        bindings.push(to);
+    }
+
+
+    /*
+    ==========================================
     DAILY
     ==========================================
     */
@@ -878,13 +986,26 @@ async function handleAnalyticsTrends(
                 .prepare(`
                     SELECT
                         report_date AS date,
+
                         SUM(total_alerts) AS total,
+
                         SUM(cyera_count) AS cyera,
+
                         SUM(purview_count) AS purview
+
                     FROM reports
+
+                    ${
+                        dateFilter
+                            ? `WHERE ${dateFilter}`
+                            : ""
+                    }
+
                     GROUP BY report_date
+
                     ORDER BY report_date ASC
                 `)
+                .bind(...bindings)
                 .all();
 
 
@@ -894,9 +1015,19 @@ async function handleAnalyticsTrends(
 
                 period: "daily",
 
+                ...(from || to
+                    ? {
+                        dateRange: {
+                            from: from || null,
+                            to: to || null
+                        }
+                    }
+                    : {}),
+
                 data:
                     (result.results || [])
                         .map(row => ({
+
                             date:
                                 row.date,
 
@@ -936,14 +1067,37 @@ async function handleAnalyticsTrends(
             await env.DB
                 .prepare(`
                     SELECT
-                        substr(report_date, 1, 6) AS month,
+
+                        substr(
+                            report_date,
+                            1,
+                            6
+                        ) AS month,
+
                         SUM(total_alerts) AS total,
+
                         SUM(cyera_count) AS cyera,
+
                         SUM(purview_count) AS purview
+
                     FROM reports
-                    GROUP BY substr(report_date, 1, 6)
+
+                    ${
+                        dateFilter
+                            ? `WHERE ${dateFilter}`
+                            : ""
+                    }
+
+                    GROUP BY
+                        substr(
+                            report_date,
+                            1,
+                            6
+                        )
+
                     ORDER BY month ASC
                 `)
+                .bind(...bindings)
                 .all();
 
 
@@ -953,9 +1107,19 @@ async function handleAnalyticsTrends(
 
                 period: "monthly",
 
+                ...(from || to
+                    ? {
+                        dateRange: {
+                            from: from || null,
+                            to: to || null
+                        }
+                    }
+                    : {}),
+
                 data:
                     (result.results || [])
                         .map(row => ({
+
                             month:
                                 row.month,
 
@@ -983,125 +1147,201 @@ async function handleAnalyticsTrends(
     }
 
 
-  /*
-==========================================
-QUARTERLY
-==========================================
-*/
+    /*
+    ==========================================
+    QUARTERLY
+    ==========================================
+    */
 
-if (period === "quarterly") {
+    if (period === "quarterly") {
 
-    const result =
-        await env.DB
-            .prepare(`
-                SELECT
-                    substr(report_date, 1, 4) AS year,
+        const result =
+            await env.DB
+                .prepare(`
+                    SELECT
 
-                    CASE
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 1 AND 3
-                            THEN 'Q1'
+                        substr(
+                            report_date,
+                            1,
+                            4
+                        ) AS year,
 
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 4 AND 6
-                            THEN 'Q2'
+                        CASE
 
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 7 AND 9
-                            THEN 'Q3'
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 1 AND 3
 
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 10 AND 12
-                            THEN 'Q4'
-                    END AS quarter,
-
-                    SUM(total_alerts) AS total,
-
-                    SUM(cyera_count) AS cyera,
-
-                    SUM(purview_count) AS purview
-
-                FROM reports
-
-                GROUP BY
-                    substr(report_date, 1, 4),
-
-                    CASE
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 1 AND 3
-                            THEN 'Q1'
-
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 4 AND 6
-                            THEN 'Q2'
-
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 7 AND 9
-                            THEN 'Q3'
-
-                        WHEN CAST(
-                            substr(report_date, 5, 2)
-                            AS INTEGER
-                        ) BETWEEN 10 AND 12
-                            THEN 'Q4'
-                    END
-
-                ORDER BY
-                    year ASC,
-                    quarter ASC
-            `)
-            .all();
+                                THEN 'Q1'
 
 
-    return jsonResponse(
-        {
-            success: true,
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 4 AND 6
 
-            period: "quarterly",
+                                THEN 'Q2'
 
-            data:
-                (result.results || [])
-                    .map(row => ({
 
-                        quarter:
-                            `${row.year}-${row.quarter}`,
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 7 AND 9
 
-                        total:
-                            Number(
-                                row.total || 0
-                            ),
+                                THEN 'Q3'
 
-                        cyera:
-                            Number(
-                                row.cyera || 0
-                            ),
 
-                        purview:
-                            Number(
-                                row.purview || 0
-                            )
-                    }))
-        },
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 10 AND 12
 
-        200,
+                                THEN 'Q4'
 
-        corsHeaders
-    );
-}
+                        END AS quarter,
+
+
+                        SUM(total_alerts) AS total,
+
+                        SUM(cyera_count) AS cyera,
+
+                        SUM(purview_count) AS purview
+
+
+                    FROM reports
+
+
+                    ${
+                        dateFilter
+                            ? `WHERE ${dateFilter}`
+                            : ""
+                    }
+
+
+                    GROUP BY
+
+                        substr(
+                            report_date,
+                            1,
+                            4
+                        ),
+
+                        CASE
+
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 1 AND 3
+
+                                THEN 'Q1'
+
+
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 4 AND 6
+
+                                THEN 'Q2'
+
+
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 7 AND 9
+
+                                THEN 'Q3'
+
+
+                            WHEN CAST(
+                                substr(
+                                    report_date,
+                                    5,
+                                    2
+                                ) AS INTEGER
+                            ) BETWEEN 10 AND 12
+
+                                THEN 'Q4'
+
+                        END
+
+
+                    ORDER BY
+
+                        year ASC,
+
+                        quarter ASC
+                `)
+                .bind(...bindings)
+                .all();
+
+
+        return jsonResponse(
+            {
+                success: true,
+
+                period: "quarterly",
+
+                ...(from || to
+                    ? {
+                        dateRange: {
+                            from: from || null,
+                            to: to || null
+                        }
+                    }
+                    : {}),
+
+                data:
+                    (result.results || [])
+                        .map(row => ({
+
+                            quarter:
+                                `${row.year}-${row.quarter}`,
+
+                            total:
+                                Number(
+                                    row.total || 0
+                                ),
+
+                            cyera:
+                                Number(
+                                    row.cyera || 0
+                                ),
+
+                            purview:
+                                Number(
+                                    row.purview || 0
+                                )
+                        }))
+            },
+
+            200,
+
+            corsHeaders
+        );
+    }
+
 /*
 ==========================================
 GET REPORT DETAILS
