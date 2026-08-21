@@ -197,7 +197,7 @@ export default {
                         url.pathname.split("/").pop()
                     );
 
-                return await handleGetReport(
+                return await handleGetReports(
                     reportId,
                     url,
                     env,
