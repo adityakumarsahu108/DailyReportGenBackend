@@ -220,27 +220,43 @@ export default {
                 corsHeaders
             );
 
-        } catch (error) {
+       } catch (error) {
 
-            console.error(
-                "Worker error:",
-                error
-            );
+    console.error(
+        "WORKER ERROR:",
+        error
+    );
 
-            return jsonResponse(
-                {
-                    success: false,
+    console.error(
+        "WORKER ERROR MESSAGE:",
+        error?.message
+    );
 
-                    error:
-                        error?.message ||
-                        String(error)
-                },
+    console.error(
+        "WORKER ERROR STACK:",
+        error?.stack
+    );
 
-                500,
+    return jsonResponse(
+        {
+            success: false,
 
-                corsHeaders
-            );
-        }
+            error:
+                error?.message ||
+                String(error),
+
+            errorName:
+                error?.name || null,
+
+            stack:
+                error?.stack || null
+        },
+
+        500,
+
+        corsHeaders
+    );
+}
     }
 };
 
