@@ -1,3 +1,26 @@
+// ==========================================
+// JSON Response Helper
+// ==========================================
+
+function jsonResponse(
+    data,
+    status = 200,
+    corsHeaders = {}
+) {
+
+    return new Response(
+        JSON.stringify(data),
+        {
+            status,
+
+            headers: {
+                "Content-Type": "application/json",
+
+                ...corsHeaders
+            }
+        }
+    );
+}
 export default {
 
     async fetch(request, env) {
@@ -20,30 +43,30 @@ export default {
 
         try {
 
-           // ==========================================
-// Health Check
-// ==========================================
+            // ==========================================
+            // Health Check
+            // ==========================================
 
-if (
-    request.method === "GET" &&
-    url.pathname === "/"
-) {
+            if (
+                request.method === "GET" &&
+                url.pathname === "/"
+            ) {
 
-    return new Response(
-        JSON.stringify({
-            success: true,
-            service: "daily-report-api",
-            database: "connected"
-        }),
-        {
-            status: 200,
-            headers: {
-                "Content-Type": "application/json",
-                ...corsHeaders
+                return new Response(
+                    JSON.stringify({
+                        success: true,
+                        service: "daily-report-api",
+                        database: "connected"
+                    }),
+                    {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "application/json",
+                            ...corsHeaders
+                        }
+                    }
+                );
             }
-        }
-    );
-}
 
             // ==========================================
             // CREATE DAILY REPORT
