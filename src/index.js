@@ -1782,6 +1782,9 @@ async function handleGetReportAlerts(
     const assignedUser =
         url.searchParams.get("assignedUser");
 
+    const search =
+        url.searchParams.get("search");
+
 
     /*
     ==========================================
@@ -1801,7 +1804,6 @@ async function handleGetReportAlerts(
             10
         );
 
-
     // Safety limits
 
     if (page < 1) {
@@ -1815,7 +1817,6 @@ async function handleGetReportAlerts(
     if (limit > 100) {
         limit = 100;
     }
-
 
     const offset =
         (page - 1) * limit;
@@ -1880,7 +1881,7 @@ async function handleGetReportAlerts(
 
     /*
     ==========================================
-    Build queries
+    Variables
     ==========================================
     */
 
@@ -1907,6 +1908,10 @@ async function handleGetReportAlerts(
         const params = [reportId];
 
 
+        /*
+        Severity filter
+        */
+
         if (severity) {
 
             where += `
@@ -1917,6 +1922,10 @@ async function handleGetReportAlerts(
         }
 
 
+        /*
+        Status filter
+        */
+
         if (status) {
 
             where += `
@@ -1926,6 +1935,10 @@ async function handleGetReportAlerts(
             params.push(status);
         }
 
+
+        /*
+        Assigned user filter
+        */
 
         if (assignedUser) {
 
@@ -1954,13 +1967,56 @@ async function handleGetReportAlerts(
 
 
         /*
+        Search
+        */
+
+        if (search) {
+
+            const searchValue =
+                `%${search}%`;
+
+            where += `
+                AND (
+                    LOWER(
+                        COALESCE(
+                            assigned_user_email,
+                            ''
+                        )
+                    ) LIKE LOWER(?)
+
+                    OR LOWER(
+                        COALESCE(
+                            severity,
+                            ''
+                        )
+                    ) LIKE LOWER(?)
+
+                    OR LOWER(
+                        COALESCE(
+                            status,
+                            ''
+                        )
+                    ) LIKE LOWER(?)
+                )
+            `;
+
+            params.push(
+                searchValue,
+                searchValue,
+                searchValue
+            );
+        }
+
+
+        /*
         Count
         */
 
         const countResult =
             await env.DB
                 .prepare(`
-                    SELECT COUNT(*) AS total
+                    SELECT
+                        COUNT(*) AS total
                     FROM cyera_alerts
                     ${where}
                 `)
@@ -1981,13 +2037,13 @@ async function handleGetReportAlerts(
         const result =
             await env.DB
                 .prepare(`
-            SELECT *
-            FROM cyera_alerts
-            ${where}
-            ORDER BY id ASC
-            LIMIT ?
-            OFFSET ?
-        `)
+                    SELECT *
+                    FROM cyera_alerts
+                    ${where}
+                    ORDER BY id ASC
+                    LIMIT ?
+                    OFFSET ?
+                `)
                 .bind(
                     ...params,
                     limit,
@@ -2026,6 +2082,10 @@ async function handleGetReportAlerts(
         const params = [reportId];
 
 
+        /*
+        Severity filter
+        */
+
         if (severity) {
 
             where += `
@@ -2035,6 +2095,10 @@ async function handleGetReportAlerts(
             params.push(severity);
         }
 
+
+        /*
+        Status filter
+        */
 
         if (status) {
 
@@ -2047,13 +2111,48 @@ async function handleGetReportAlerts(
 
 
         /*
+        Search
+        */
+
+        if (search) {
+
+            const searchValue =
+                `%${search}%`;
+
+            where += `
+                AND (
+                    LOWER(
+                        COALESCE(
+                            severity,
+                            ''
+                        )
+                    ) LIKE LOWER(?)
+
+                    OR LOWER(
+                        COALESCE(
+                            status,
+                            ''
+                        )
+                    ) LIKE LOWER(?)
+                )
+            `;
+
+            params.push(
+                searchValue,
+                searchValue
+            );
+        }
+
+
+        /*
         Count
         */
 
         const countResult =
             await env.DB
                 .prepare(`
-                    SELECT COUNT(*) AS total
+                    SELECT
+                        COUNT(*) AS total
                     FROM purview_alerts
                     ${where}
                 `)
@@ -2074,13 +2173,13 @@ async function handleGetReportAlerts(
         const result =
             await env.DB
                 .prepare(`
-            SELECT *
-            FROM purview_alerts
-            ${where}
-            ORDER BY id ASC
-            LIMIT ?
-            OFFSET ?
-        `)
+                    SELECT *
+                    FROM purview_alerts
+                    ${where}
+                    ORDER BY id ASC
+                    LIMIT ?
+                    OFFSET ?
+                `)
                 .bind(
                     ...params,
                     limit,
@@ -2103,12 +2202,7 @@ async function handleGetReportAlerts(
 
     /*
     ==========================================
-    No source specified
-    ==========================================
-    
-    For now, don't combine Cyera and Purview.
-    The frontend should explicitly request
-    one source.
+    Source is required
     ==========================================
     */
 
@@ -2153,17 +2247,22 @@ async function handleGetReportAlerts(
             success: true,
 
             report: {
+
                 reportId:
                     report.report_id,
 
                 reportDate:
                     report.report_date
+
             },
 
             source:
                 source.toLowerCase(),
 
             filters: {
+
+                search:
+                    search || null,
 
                 severity:
                     severity || null,
@@ -2173,6 +2272,7 @@ async function handleGetReportAlerts(
 
                 assignedUser:
                     assignedUser || null
+
             },
 
             pagination: {
@@ -2190,6 +2290,7 @@ async function handleGetReportAlerts(
 
                 hasPreviousPage:
                     page > 1
+
             },
 
             alerts
