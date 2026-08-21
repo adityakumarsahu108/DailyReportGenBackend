@@ -37,8 +37,10 @@ export default {
                 );
             }
 
+            // ==========================================
+            // CREATE DAILY REPORT
+            // ==========================================
 
-            // Create daily report
             if (
                 request.method === "POST" &&
                 url.pathname === "/api/v1/reports"
@@ -52,7 +54,31 @@ export default {
             }
 
 
-            // Analytics summary
+            // ==========================================
+            // LIST REPORTS
+            // ==========================================
+
+            // Example:
+            // /api/v1/reports?page=1&limit=30
+            // /api/v1/reports?page=1&limit=30&from=20260801&to=20260831
+
+            if (
+                request.method === "GET" &&
+                url.pathname === "/api/v1/reports"
+            ) {
+
+                return await handleGetReports(
+                    url,
+                    env,
+                    corsHeaders
+                );
+            }
+
+
+            // ==========================================
+            // ANALYTICS SUMMARY
+            // ==========================================
+
             if (
                 request.method === "GET" &&
                 url.pathname === "/api/v1/analytics/summary"
@@ -65,7 +91,10 @@ export default {
             }
 
 
-            // Analytics trends
+            // ==========================================
+            // ANALYTICS TRENDS
+            // ==========================================
+
             if (
                 request.method === "GET" &&
                 url.pathname === "/api/v1/analytics/trends"
@@ -79,15 +108,19 @@ export default {
             }
 
 
-            /*
-            ==========================================
-            REPORT ALERTS
-            ==========================================
-            */
+            // ==========================================
+            // REPORT ALERTS
+            // ==========================================
 
-            // Get individual alerts for a report
+            // Get individual alerts for a report.
+            //
             // Example:
-            // /api/v1/reports/REP-21202602/alerts?source=cyera
+            // /api/v1/reports/REP-20260821/alerts
+            //
+            // Optional:
+            // /api/v1/reports/REP-20260821/alerts?source=cyera
+            // /api/v1/reports/REP-20260821/alerts?source=purview
+
             if (
                 request.method === "GET" &&
                 url.pathname.match(
@@ -112,15 +145,15 @@ export default {
             }
 
 
-            /*
-            ==========================================
-            REPORT SUMMARY
-            ==========================================
-            */
+            // ==========================================
+            // REPORT SUMMARY / DETAILS
+            // ==========================================
 
-            // Get report summary
+            // Get report summary.
+            //
             // Example:
-            // /api/v1/reports/REP-21202602
+            // /api/v1/reports/REP-20260821
+
             if (
                 request.method === "GET" &&
                 url.pathname.startsWith(
@@ -140,7 +173,6 @@ export default {
                     corsHeaders
                 );
             }
-
 
             /*
             ==========================================
@@ -995,10 +1027,9 @@ async function handleAnalyticsTrends(
 
                     FROM reports
 
-                    ${
-                        dateFilter
-                            ? `WHERE ${dateFilter}`
-                            : ""
+                    ${dateFilter
+                        ? `WHERE ${dateFilter}`
+                        : ""
                     }
 
                     GROUP BY report_date
@@ -1082,10 +1113,9 @@ async function handleAnalyticsTrends(
 
                     FROM reports
 
-                    ${
-                        dateFilter
-                            ? `WHERE ${dateFilter}`
-                            : ""
+                    ${dateFilter
+                        ? `WHERE ${dateFilter}`
+                        : ""
                     }
 
                     GROUP BY
@@ -1224,10 +1254,9 @@ async function handleAnalyticsTrends(
                     FROM reports
 
 
-                    ${
-                        dateFilter
-                            ? `WHERE ${dateFilter}`
-                            : ""
+                    ${dateFilter
+                        ? `WHERE ${dateFilter}`
+                        : ""
                     }
 
 
@@ -1342,363 +1371,463 @@ async function handleAnalyticsTrends(
         );
     }
 
-/*
-==========================================
-GET REPORT DETAILS
-==========================================
-*/
-/*
-==========================================
-GET REPORT SUMMARY
-==========================================
-*/
-
-async function handleGetReport(
-    reportId,
-    url,
-    env,
-    corsHeaders
-) {
-
     /*
     ==========================================
-    Get report
+    GET REPORT DETAILS
+    ==========================================
+    */
+    /*
+    ==========================================
+    GET REPORT SUMMARY
     ==========================================
     */
 
-    const report = await env.DB
-        .prepare(`
-            SELECT
-                report_id,
-                report_date,
-                cyera_count,
-                purview_count,
-                total_alerts,
-                generated_at
-            FROM reports
-            WHERE report_id = ?
-            LIMIT 1
-        `)
-        .bind(reportId)
-        .first();
-
-
-    /*
-    ==========================================
-    Report not found
-    ==========================================
-    */
-
-    if (!report) {
-
-        return jsonResponse(
-            {
-                success: false,
-                error: "Report not found"
-            },
-            404,
-            corsHeaders
-        );
-    }
-
-
-    /*
-    ==========================================
-    Cyera severity
-    ==========================================
-    */
-
-    const cyeraSeverity =
-        await env.DB
-            .prepare(`
-                SELECT
-                    LOWER(
-                        COALESCE(
-                            severity,
-                            'unknown'
-                        )
-                    ) AS severity,
-                    COUNT(*) AS count
-                FROM cyera_alerts
-                WHERE report_id = ?
-                GROUP BY LOWER(
-                    COALESCE(
-                        severity,
-                        'unknown'
-                    )
-                )
-            `)
-            .bind(reportId)
-            .all();
-
-
-    /*
-    ==========================================
-    Cyera status
-    ==========================================
-    */
-
-    const cyeraStatus =
-        await env.DB
-            .prepare(`
-                SELECT
-                    LOWER(
-                        COALESCE(
-                            status,
-                            'unknown'
-                        )
-                    ) AS status,
-                    COUNT(*) AS count
-                FROM cyera_alerts
-                WHERE report_id = ?
-                GROUP BY LOWER(
-                    COALESCE(
-                        status,
-                        'unknown'
-                    )
-                )
-            `)
-            .bind(reportId)
-            .all();
-
-
-    /*
-    ==========================================
-    Cyera assigned users
-    ==========================================
-    */
-
-    const cyeraAssignedUsers =
-        await env.DB
-            .prepare(`
-                SELECT
-                    COALESCE(
-                        assigned_user_email,
-                        'Unassigned'
-                    ) AS assigned_user,
-                    COUNT(*) AS count
-                FROM cyera_alerts
-                WHERE report_id = ?
-                GROUP BY assigned_user_email
-                ORDER BY count DESC
-            `)
-            .bind(reportId)
-            .all();
-
-
-    /*
-    ==========================================
-    Purview severity
-    ==========================================
-    */
-
-    const purviewSeverity =
-        await env.DB
-            .prepare(`
-                SELECT
-                    LOWER(
-                        COALESCE(
-                            severity,
-                            'unknown'
-                        )
-                    ) AS severity,
-                    COUNT(*) AS count
-                FROM purview_alerts
-                WHERE report_id = ?
-                GROUP BY LOWER(
-                    COALESCE(
-                        severity,
-                        'unknown'
-                    )
-                )
-            `)
-            .bind(reportId)
-            .all();
-
-
-    /*
-    ==========================================
-    Purview status
-    ==========================================
-    */
-
-    const purviewStatus =
-        await env.DB
-            .prepare(`
-                SELECT
-                    LOWER(
-                        COALESCE(
-                            status,
-                            'unknown'
-                        )
-                    ) AS status,
-                    COUNT(*) AS count
-                FROM purview_alerts
-                WHERE report_id = ?
-                GROUP BY LOWER(
-                    COALESCE(
-                        status,
-                        'unknown'
-                    )
-                )
-            `)
-            .bind(reportId)
-            .all();
-
-
-    /*
-    ==========================================
-    Return summary only
-    ==========================================
-    */
-
-    return jsonResponse(
-        {
-            success: true,
-
-            report: report,
-
-            cyera: {
-
-                count:
-                    Number(
-                        report.cyera_count || 0
-                    ),
-
-                severity:
-                    cyeraSeverity.results || [],
-
-                status:
-                    cyeraStatus.results || [],
-
-                assignedUsers:
-                    cyeraAssignedUsers.results || []
-            },
-
-            purview: {
-
-                count:
-                    Number(
-                        report.purview_count || 0
-                    ),
-
-                severity:
-                    purviewSeverity.results || [],
-
-                status:
-                    purviewStatus.results || []
-            }
-        },
-
-        200,
-
+    async function handleGetReports(
+        url,
+        env,
         corsHeaders
-    );
-}
-
-/*
-==========================================
-GET REPORT ALERTS
-==========================================
-*/
-
-async function handleGetReportAlerts(
-    reportId,
-    url,
-    env,
-    corsHeaders
-) {
-
-    /*
-    ==========================================
-    Query parameters
-    ==========================================
-    */
-
-    const source =
-        url.searchParams.get("source");
-
-    const severity =
-        url.searchParams.get("severity");
-
-    const status =
-        url.searchParams.get("status");
-
-    const assignedUser =
-        url.searchParams.get("assignedUser");
-
-
-    /*
-    ==========================================
-    Pagination
-    ==========================================
-    */
-
-    let page =
-        parseInt(
-            url.searchParams.get("page") || "1",
-            10
-        );
-
-    let limit =
-        parseInt(
-            url.searchParams.get("limit") || "50",
-            10
-        );
-
-
-    // Safety limits
-
-    if (page < 1) {
-        page = 1;
-    }
-
-    if (limit < 1) {
-        limit = 50;
-    }
-
-    if (limit > 100) {
-        limit = 100;
-    }
-
-
-    const offset =
-        (page - 1) * limit;
-
-
-    /*
-    ==========================================
-    Validate source
-    ==========================================
-    */
-
-    if (
-        source &&
-        source.toLowerCase() !== "cyera" &&
-        source.toLowerCase() !== "purview"
     ) {
 
+        /*
+        ==========================================
+        Pagination
+        ==========================================
+        */
+
+        let page =
+            parseInt(
+                url.searchParams.get("page") || "1",
+                10
+            );
+
+        let limit =
+            parseInt(
+                url.searchParams.get("limit") || "30",
+                10
+            );
+
+
+        /*
+        ==========================================
+        Validate pagination
+        ==========================================
+        */
+
+        if (
+            !Number.isInteger(page) ||
+            page < 1
+        ) {
+
+            page = 1;
+
+        }
+
+
+        if (
+            !Number.isInteger(limit) ||
+            limit < 1
+        ) {
+
+            limit = 30;
+
+        }
+
+
+        // Prevent excessively large requests
+        limit =
+            Math.min(limit, 100);
+
+
+        const offset =
+            (page - 1) * limit;
+
+
+        /*
+        ==========================================
+        Date filters
+        ==========================================
+        */
+
+        const from =
+            url.searchParams.get("from");
+
+        const to =
+            url.searchParams.get("to");
+
+
+        /*
+        ==========================================
+        Validate dates
+        ==========================================
+        */
+
+        if (
+            (from && !/^\d{8}$/.test(from)) ||
+            (to && !/^\d{8}$/.test(to))
+        ) {
+
+            return jsonResponse(
+                {
+                    success: false,
+
+                    error:
+                        "Invalid date format. Use YYYYMMDD."
+                },
+
+                400,
+
+                corsHeaders
+            );
+
+        }
+
+
+        if (
+            from &&
+            to &&
+            from > to
+        ) {
+
+            return jsonResponse(
+                {
+                    success: false,
+
+                    error:
+                        "'from' date cannot be greater than 'to' date."
+                },
+
+                400,
+
+                corsHeaders
+            );
+
+        }
+
+
+        /*
+        ==========================================
+        Build WHERE clause
+        ==========================================
+        */
+
+        let whereClause = "";
+
+        const filterBindings = [];
+
+
+        if (from) {
+
+            whereClause += `
+            report_date >= ?
+        `;
+
+            filterBindings.push(from);
+
+        }
+
+
+        if (to) {
+
+            if (from) {
+
+                whereClause += `
+                AND report_date <= ?
+            `;
+
+            } else {
+
+                whereClause += `
+                report_date <= ?
+            `;
+
+            }
+
+            filterBindings.push(to);
+
+        }
+
+
+        const whereSQL =
+            whereClause
+                ? `WHERE ${whereClause}`
+                : "";
+
+
+        /*
+        ==========================================
+        Get total count
+        ==========================================
+        */
+
+        const countResult =
+            await env.DB
+                .prepare(`
+                SELECT
+                    COUNT(*) AS total
+
+                FROM reports
+
+                ${whereSQL}
+            `)
+                .bind(...filterBindings)
+                .first();
+
+
+        const total =
+            Number(
+                countResult?.total || 0
+            );
+
+
+        /*
+        ==========================================
+        Calculate pages
+        ==========================================
+        */
+
+        const totalPages =
+            total === 0
+                ? 0
+                : Math.ceil(
+                    total / limit
+                );
+
+
+        /*
+        ==========================================
+        Get reports
+        ==========================================
+        */
+
+        const reportResult =
+            await env.DB
+                .prepare(`
+                SELECT
+
+                    report_id,
+
+                    report_date,
+
+                    cyera_count,
+
+                    purview_count,
+
+                    total_alerts,
+
+                    generated_at
+
+                FROM reports
+
+                ${whereSQL}
+
+                ORDER BY
+                    report_date DESC
+
+                LIMIT ?
+
+                OFFSET ?
+            `)
+                .bind(
+                    ...filterBindings,
+                    limit,
+                    offset
+                )
+                .all();
+
+
+        /*
+        ==========================================
+        Format response
+        ==========================================
+        */
+
+        const reports =
+            (reportResult.results || [])
+                .map(row => ({
+
+                    reportId:
+                        row.report_id,
+
+                    reportDate:
+                        row.report_date,
+
+                    cyera:
+                        Number(
+                            row.cyera_count || 0
+                        ),
+
+                    purview:
+                        Number(
+                            row.purview_count || 0
+                        ),
+
+                    total:
+                        Number(
+                            row.total_alerts || 0
+                        ),
+
+                    generatedAt:
+                        row.generated_at
+
+                }));
+
+
+        /*
+        ==========================================
+        Response
+        ==========================================
+        */
+
         return jsonResponse(
             {
-                success: false,
-                error:
-                    "Invalid source. Use cyera or purview."
+                success: true,
+
+                pagination: {
+
+                    page,
+
+                    limit,
+
+                    total,
+
+                    totalPages,
+
+                    hasNextPage:
+                        page < totalPages,
+
+                    hasPreviousPage:
+                        page > 1 &&
+                        totalPages > 0
+
+                },
+
+                ...(from || to
+                    ? {
+                        dateRange: {
+
+                            from:
+                                from || null,
+
+                            to:
+                                to || null
+
+                        }
+                    }
+                    : {}),
+
+                data: reports
+
             },
-            400,
+
+            200,
+
             corsHeaders
         );
     }
 
-
     /*
     ==========================================
-    Verify report exists
+    GET REPORT ALERTS
     ==========================================
     */
 
-    const report =
-        await env.DB
-            .prepare(`
+    async function handleGetReportAlerts(
+        reportId,
+        url,
+        env,
+        corsHeaders
+    ) {
+
+        /*
+        ==========================================
+        Query parameters
+        ==========================================
+        */
+
+        const source =
+            url.searchParams.get("source");
+
+        const severity =
+            url.searchParams.get("severity");
+
+        const status =
+            url.searchParams.get("status");
+
+        const assignedUser =
+            url.searchParams.get("assignedUser");
+
+
+        /*
+        ==========================================
+        Pagination
+        ==========================================
+        */
+
+        let page =
+            parseInt(
+                url.searchParams.get("page") || "1",
+                10
+            );
+
+        let limit =
+            parseInt(
+                url.searchParams.get("limit") || "50",
+                10
+            );
+
+
+        // Safety limits
+
+        if (page < 1) {
+            page = 1;
+        }
+
+        if (limit < 1) {
+            limit = 50;
+        }
+
+        if (limit > 100) {
+            limit = 100;
+        }
+
+
+        const offset =
+            (page - 1) * limit;
+
+
+        /*
+        ==========================================
+        Validate source
+        ==========================================
+        */
+
+        if (
+            source &&
+            source.toLowerCase() !== "cyera" &&
+            source.toLowerCase() !== "purview"
+        ) {
+
+            return jsonResponse(
+                {
+                    success: false,
+                    error:
+                        "Invalid source. Use cyera or purview."
+                },
+                400,
+                corsHeaders
+            );
+        }
+
+
+        /*
+        ==========================================
+        Verify report exists
+        ==========================================
+        */
+
+        const report =
+            await env.DB
+                .prepare(`
                 SELECT
                     report_id,
                     report_date
@@ -1706,445 +1835,445 @@ async function handleGetReportAlerts(
                 WHERE report_id = ?
                 LIMIT 1
             `)
-            .bind(reportId)
-            .first();
+                .bind(reportId)
+                .first();
 
 
-    if (!report) {
+        if (!report) {
 
-        return jsonResponse(
-            {
-                success: false,
-                error: "Report not found"
-            },
-            404,
-            corsHeaders
-        );
-    }
-
-
-    /*
-    ==========================================
-    Build queries
-    ==========================================
-    */
-
-    let alerts = [];
-
-    let total = 0;
+            return jsonResponse(
+                {
+                    success: false,
+                    error: "Report not found"
+                },
+                404,
+                corsHeaders
+            );
+        }
 
 
-    /*
-    ==========================================
-    CYERA
-    ==========================================
-    */
+        /*
+        ==========================================
+        Build queries
+        ==========================================
+        */
 
-    if (
-        !source ||
-        source.toLowerCase() === "cyera"
-    ) {
+        let alerts = [];
 
-        let where = `
+        let total = 0;
+
+
+        /*
+        ==========================================
+        CYERA
+        ==========================================
+        */
+
+        if (
+            !source ||
+            source.toLowerCase() === "cyera"
+        ) {
+
+            let where = `
             WHERE report_id = ?
         `;
 
-        const params = [reportId];
+            const params = [reportId];
 
 
-        if (severity) {
+            if (severity) {
 
-            where += `
+                where += `
                 AND LOWER(severity) = LOWER(?)
             `;
 
-            params.push(severity);
-        }
+                params.push(severity);
+            }
 
 
-        if (status) {
+            if (status) {
 
-            where += `
+                where += `
                 AND LOWER(status) = LOWER(?)
             `;
 
-            params.push(status);
-        }
+                params.push(status);
+            }
 
 
-        if (assignedUser) {
+            if (assignedUser) {
 
-            if (
-                assignedUser.toLowerCase() ===
-                "unassigned"
-            ) {
+                if (
+                    assignedUser.toLowerCase() ===
+                    "unassigned"
+                ) {
 
-                where += `
+                    where += `
                     AND assigned_user_email IS NULL
                 `;
 
-            } else {
+                } else {
 
-                where += `
+                    where += `
                     AND LOWER(
                         assigned_user_email
                     ) = LOWER(?)
                 `;
 
-                params.push(
-                    assignedUser
-                );
+                    params.push(
+                        assignedUser
+                    );
+                }
             }
-        }
 
 
-        /*
-        Count
-        */
+            /*
+            Count
+            */
 
-        const countResult =
-            await env.DB
-                .prepare(`
+            const countResult =
+                await env.DB
+                    .prepare(`
                     SELECT COUNT(*) AS total
                     FROM cyera_alerts
                     ${where}
                 `)
-                .bind(...params)
-                .first();
+                    .bind(...params)
+                    .first();
 
 
-        total =
-            Number(
-                countResult?.total || 0
-            );
+            total =
+                Number(
+                    countResult?.total || 0
+                );
 
 
-        /*
-        Records
-        */
+            /*
+            Records
+            */
 
-        const result =
-            await env.DB
-                .prepare(`
+            const result =
+                await env.DB
+                    .prepare(`
                     SELECT *
                     FROM cyera_alerts
                     ${where}
                     LIMIT ?
                     OFFSET ?
                 `)
-                .bind(
-                    ...params,
-                    limit,
-                    offset
-                )
-                .all();
+                    .bind(
+                        ...params,
+                        limit,
+                        offset
+                    )
+                    .all();
 
 
-        alerts =
-            (result.results || [])
-                .map(record => ({
+            alerts =
+                (result.results || [])
+                    .map(record => ({
 
-                    source: "cyera",
+                        source: "cyera",
 
-                    ...record
+                        ...record
 
-                }));
-    }
+                    }));
+        }
 
 
-    /*
-    ==========================================
-    PURVIEW
-    ==========================================
-    */
+        /*
+        ==========================================
+        PURVIEW
+        ==========================================
+        */
 
-    if (
-        source &&
-        source.toLowerCase() === "purview"
-    ) {
+        if (
+            source &&
+            source.toLowerCase() === "purview"
+        ) {
 
-        let where = `
+            let where = `
             WHERE report_id = ?
         `;
 
-        const params = [reportId];
+            const params = [reportId];
 
 
-        if (severity) {
+            if (severity) {
 
-            where += `
+                where += `
                 AND LOWER(severity) = LOWER(?)
             `;
 
-            params.push(severity);
-        }
+                params.push(severity);
+            }
 
 
-        if (status) {
+            if (status) {
 
-            where += `
+                where += `
                 AND LOWER(status) = LOWER(?)
             `;
 
-            params.push(status);
-        }
+                params.push(status);
+            }
 
 
-        /*
-        Count
-        */
+            /*
+            Count
+            */
 
-        const countResult =
-            await env.DB
-                .prepare(`
+            const countResult =
+                await env.DB
+                    .prepare(`
                     SELECT COUNT(*) AS total
                     FROM purview_alerts
                     ${where}
                 `)
-                .bind(...params)
-                .first();
+                    .bind(...params)
+                    .first();
 
 
-        total =
-            Number(
-                countResult?.total || 0
-            );
+            total =
+                Number(
+                    countResult?.total || 0
+                );
 
 
-        /*
-        Records
-        */
+            /*
+            Records
+            */
 
-        const result =
-            await env.DB
-                .prepare(`
+            const result =
+                await env.DB
+                    .prepare(`
                     SELECT *
                     FROM purview_alerts
                     ${where}
                     LIMIT ?
                     OFFSET ?
                 `)
-                .bind(
-                    ...params,
-                    limit,
-                    offset
-                )
-                .all();
+                    .bind(
+                        ...params,
+                        limit,
+                        offset
+                    )
+                    .all();
 
 
-        alerts =
-            (result.results || [])
-                .map(record => ({
+            alerts =
+                (result.results || [])
+                    .map(record => ({
 
-                    source: "purview",
+                        source: "purview",
 
-                    ...record
+                        ...record
 
-                }));
-    }
+                    }));
+        }
 
 
-    /*
-    ==========================================
-    No source specified
-    ==========================================
-    
-    For now, don't combine Cyera and Purview.
-    The frontend should explicitly request
-    one source.
-    ==========================================
-    */
+        /*
+        ==========================================
+        No source specified
+        ==========================================
+        
+        For now, don't combine Cyera and Purview.
+        The frontend should explicitly request
+        one source.
+        ==========================================
+        */
 
-    if (!source) {
+        if (!source) {
+
+            return jsonResponse(
+                {
+                    success: false,
+
+                    error:
+                        "source is required. Use source=cyera or source=purview."
+                },
+
+                400,
+
+                corsHeaders
+            );
+        }
+
+
+        /*
+        ==========================================
+        Pagination metadata
+        ==========================================
+        */
+
+        const totalPages =
+            Math.ceil(
+                total / limit
+            );
+
+
+        /*
+        ==========================================
+        Response
+        ==========================================
+        */
 
         return jsonResponse(
             {
-                success: false,
 
-                error:
-                    "source is required. Use source=cyera or source=purview."
+                success: true,
+
+                report: {
+                    reportId:
+                        report.report_id,
+
+                    reportDate:
+                        report.report_date
+                },
+
+                source:
+                    source.toLowerCase(),
+
+                filters: {
+
+                    severity:
+                        severity || null,
+
+                    status:
+                        status || null,
+
+                    assignedUser:
+                        assignedUser || null
+                },
+
+                pagination: {
+
+                    page,
+
+                    limit,
+
+                    total,
+
+                    totalPages,
+
+                    hasNextPage:
+                        page < totalPages,
+
+                    hasPreviousPage:
+                        page > 1
+                },
+
+                alerts
+
             },
 
-            400,
+            200,
 
             corsHeaders
         );
     }
 
-
     /*
     ==========================================
-    Pagination metadata
+    VALIDATION
     ==========================================
     */
 
-    const totalPages =
-        Math.ceil(
-            total / limit
-        );
+    function validateReport(data) {
 
+        if (!data) {
 
-    /*
-    ==========================================
-    Response
-    ==========================================
-    */
-
-    return jsonResponse(
-        {
-
-            success: true,
-
-            report: {
-                reportId:
-                    report.report_id,
-
-                reportDate:
-                    report.report_date
-            },
-
-            source:
-                source.toLowerCase(),
-
-            filters: {
-
-                severity:
-                    severity || null,
-
-                status:
-                    status || null,
-
-                assignedUser:
-                    assignedUser || null
-            },
-
-            pagination: {
-
-                page,
-
-                limit,
-
-                total,
-
-                totalPages,
-
-                hasNextPage:
-                    page < totalPages,
-
-                hasPreviousPage:
-                    page > 1
-            },
-
-            alerts
-
-        },
-
-        200,
-
-        corsHeaders
-    );
-}
-
-/*
-==========================================
-VALIDATION
-==========================================
-*/
-
-function validateReport(data) {
-
-    if (!data) {
-
-        return {
-            valid: false,
-            error: "Request body is empty"
-        };
-    }
-
-
-    if (!data.report) {
-
-        return {
-            valid: false,
-            error: "Missing report object"
-        };
-    }
-
-
-    if (!data.report.reportId) {
-
-        return {
-            valid: false,
-            error: "Missing report.reportId"
-        };
-    }
-
-
-    if (!data.report.reportDate) {
-
-        return {
-            valid: false,
-            error: "Missing report.reportDate"
-        };
-    }
-
-
-    if (
-        data.cyera &&
-        !Array.isArray(data.cyera.records)
-    ) {
-
-        return {
-            valid: false,
-            error: "cyera.records must be an array"
-        };
-    }
-
-
-    if (
-        data.purview &&
-        !Array.isArray(data.purview.records)
-    ) {
-
-        return {
-            valid: false,
-            error: "purview.records must be an array"
-        };
-    }
-
-
-    return {
-        valid: true
-    };
-}
-
-
-/*
-==========================================
-JSON RESPONSE
-==========================================
-*/
-
-function jsonResponse(
-    data,
-    status,
-    additionalHeaders = {}
-) {
-
-    return new Response(
-
-        JSON.stringify(data, null, 2),
-
-        {
-            status,
-
-            headers: {
-                "Content-Type":
-                    "application/json",
-
-                ...additionalHeaders
-            }
+            return {
+                valid: false,
+                error: "Request body is empty"
+            };
         }
-    );
-}
+
+
+        if (!data.report) {
+
+            return {
+                valid: false,
+                error: "Missing report object"
+            };
+        }
+
+
+        if (!data.report.reportId) {
+
+            return {
+                valid: false,
+                error: "Missing report.reportId"
+            };
+        }
+
+
+        if (!data.report.reportDate) {
+
+            return {
+                valid: false,
+                error: "Missing report.reportDate"
+            };
+        }
+
+
+        if (
+            data.cyera &&
+            !Array.isArray(data.cyera.records)
+        ) {
+
+            return {
+                valid: false,
+                error: "cyera.records must be an array"
+            };
+        }
+
+
+        if (
+            data.purview &&
+            !Array.isArray(data.purview.records)
+        ) {
+
+            return {
+                valid: false,
+                error: "purview.records must be an array"
+            };
+        }
+
+
+        return {
+            valid: true
+        };
+    }
+
+
+    /*
+    ==========================================
+    JSON RESPONSE
+    ==========================================
+    */
+
+    function jsonResponse(
+        data,
+        status,
+        additionalHeaders = {}
+    ) {
+
+        return new Response(
+
+            JSON.stringify(data, null, 2),
+
+            {
+                status,
+
+                headers: {
+                    "Content-Type":
+                        "application/json",
+
+                    ...additionalHeaders
+                }
+            }
+        );
+    }
 }
