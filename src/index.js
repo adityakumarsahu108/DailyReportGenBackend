@@ -20,22 +20,30 @@ export default {
 
         try {
 
-            // Health check
-            if (
-                request.method === "GET" &&
-                url.pathname === "/api/v1/health"
-            ) {
+           // ==========================================
+// Health Check
+// ==========================================
 
-                return jsonResponse(
-                    {
-                        success: true,
-                        service: "daily-report-api",
-                        database: "connected"
-                    },
-                    200,
-                    corsHeaders
-                );
+if (
+    request.method === "GET" &&
+    url.pathname === "/"
+) {
+
+    return new Response(
+        JSON.stringify({
+            success: true,
+            service: "daily-report-api",
+            database: "connected"
+        }),
+        {
+            status: 200,
+            headers: {
+                "Content-Type": "application/json",
+                ...corsHeaders
             }
+        }
+    );
+}
 
             // ==========================================
             // CREATE DAILY REPORT
