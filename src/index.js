@@ -1417,6 +1417,7 @@ async function handleAnalyticsTrends(
             corsHeaders
         );
     }
+}
 
     /*
     ==========================================
@@ -2323,4 +2324,3 @@ async function handleAnalyticsTrends(
             }
         );
     }
-}
