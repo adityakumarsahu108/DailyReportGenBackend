@@ -1407,356 +1407,6 @@ GET REPORT DETAILS
 GET REPORT SUMMARY
 ==========================================
 */
-
-async function handleGetReports(
-    url,
-    env,
-    corsHeaders
-) {
-
-    /*
-    ==========================================
-    Pagination
-    ==========================================
-    */
-
-    let page =
-        parseInt(
-            url.searchParams.get("page") || "1",
-            10
-        );
-
-    let limit =
-        parseInt(
-            url.searchParams.get("limit") || "30",
-            10
-        );
-
-
-    /*
-    ==========================================
-    Validate pagination
-    ==========================================
-    */
-
-    if (
-        !Number.isInteger(page) ||
-        page < 1
-    ) {
-
-        page = 1;
-
-    }
-
-
-    if (
-        !Number.isInteger(limit) ||
-        limit < 1
-    ) {
-
-        limit = 30;
-
-    }
-
-
-    // Prevent excessively large requests
-    limit =
-        Math.min(limit, 100);
-
-
-    const offset =
-        (page - 1) * limit;
-
-
-    /*
-    ==========================================
-    Date filters
-    ==========================================
-    */
-
-    const from =
-        url.searchParams.get("from");
-
-    const to =
-        url.searchParams.get("to");
-
-
-    /*
-    ==========================================
-    Validate dates
-    ==========================================
-    */
-
-    if (
-        (from && !/^\d{8}$/.test(from)) ||
-        (to && !/^\d{8}$/.test(to))
-    ) {
-
-        return jsonResponse(
-            {
-                success: false,
-
-                error:
-                    "Invalid date format. Use YYYYMMDD."
-            },
-
-            400,
-
-            corsHeaders
-        );
-
-    }
-
-
-    if (
-        from &&
-        to &&
-        from > to
-    ) {
-
-        return jsonResponse(
-            {
-                success: false,
-
-                error:
-                    "'from' date cannot be greater than 'to' date."
-            },
-
-            400,
-
-            corsHeaders
-        );
-
-    }
-
-
-    /*
-    ==========================================
-    Build WHERE clause
-    ==========================================
-    */
-
-    let whereClause = "";
-
-    const filterBindings = [];
-
-
-    if (from) {
-
-        whereClause += `
-            report_date >= ?
-        `;
-
-        filterBindings.push(from);
-
-    }
-
-
-    if (to) {
-
-        if (from) {
-
-            whereClause += `
-                AND report_date <= ?
-            `;
-
-        } else {
-
-            whereClause += `
-                report_date <= ?
-            `;
-
-        }
-
-        filterBindings.push(to);
-
-    }
-
-
-    const whereSQL =
-        whereClause
-            ? `WHERE ${whereClause}`
-            : "";
-
-
-    /*
-    ==========================================
-    Get total count
-    ==========================================
-    */
-
-    const countResult =
-        await env.DB
-            .prepare(`
-                SELECT
-                    COUNT(*) AS total
-
-                FROM reports
-
-                ${whereSQL}
-            `)
-            .bind(...filterBindings)
-            .first();
-
-
-    const total =
-        Number(
-            countResult?.total || 0
-        );
-
-
-    /*
-    ==========================================
-    Calculate pages
-    ==========================================
-    */
-
-    const totalPages =
-        total === 0
-            ? 0
-            : Math.ceil(
-                total / limit
-            );
-
-
-    /*
-    ==========================================
-    Get reports
-    ==========================================
-    */
-
-    const reportResult =
-        await env.DB
-            .prepare(`
-                SELECT
-
-                    report_id,
-
-                    report_date,
-
-                    cyera_count,
-
-                    purview_count,
-
-                    total_alerts,
-
-                    generated_at
-
-                FROM reports
-
-                ${whereSQL}
-
-                ORDER BY
-                    report_date DESC
-
-                LIMIT ?
-
-                OFFSET ?
-            `)
-            .bind(
-                ...filterBindings,
-                limit,
-                offset
-            )
-            .all();
-
-
-    /*
-    ==========================================
-    Format response
-    ==========================================
-    */
-
-    const reports =
-        (reportResult.results || [])
-            .map(row => ({
-
-                reportId:
-                    row.report_id,
-
-                reportDate:
-                    row.report_date,
-
-                cyera:
-                    Number(
-                        row.cyera_count || 0
-                    ),
-
-                purview:
-                    Number(
-                        row.purview_count || 0
-                    ),
-
-                total:
-                    Number(
-                        row.total_alerts || 0
-                    ),
-
-                generatedAt:
-                    row.generated_at
-
-            }));
-
-
-    /*
-    ==========================================
-    Response
-    ==========================================
-    */
-
-    return jsonResponse(
-        {
-            success: true,
-
-            pagination: {
-
-                page,
-
-                limit,
-
-                total,
-
-                totalPages,
-
-                hasNextPage:
-                    page < totalPages,
-
-                hasPreviousPage:
-                    page > 1 &&
-                    totalPages > 0
-
-            },
-
-            ...(from || to
-                ? {
-                    dateRange: {
-
-                        from:
-                            from || null,
-
-                        to:
-                            to || null
-
-                    }
-                }
-                : {}),
-
-            data: reports
-
-        },
-
-        200,
-
-        corsHeaders
-    );
-}
-
-/*
-==========================================
-GET REPORT ALERTS
-==========================================
-*/
-
 async function handleGetReportAlerts(
     reportId,
     url,
@@ -1785,6 +1435,12 @@ async function handleGetReportAlerts(
     const search =
         url.searchParams.get("search");
 
+    const from =
+        url.searchParams.get("from");
+
+    const to =
+        url.searchParams.get("to");
+
 
     /*
     ==========================================
@@ -1803,8 +1459,6 @@ async function handleGetReportAlerts(
             url.searchParams.get("limit") || "50",
             10
         );
-
-    // Safety limits
 
     if (page < 1) {
         page = 1;
@@ -1857,7 +1511,9 @@ async function handleGetReportAlerts(
             .prepare(`
                 SELECT
                     report_id,
-                    report_date
+                    report_date,
+                    reporting_from,
+                    reporting_to
                 FROM reports
                 WHERE report_id = ?
                 LIMIT 1
@@ -1881,6 +1537,55 @@ async function handleGetReportAlerts(
 
     /*
     ==========================================
+    Validate date format
+    ==========================================
+    
+    Expected:
+    YYYY-MM-DD
+
+    Example:
+    from=2026-08-01
+    to=2026-08-21
+
+    ==========================================
+    */
+
+    const dateRegex =
+        /^\d{4}-\d{2}-\d{2}$/;
+
+    if (
+        (from && !dateRegex.test(from)) ||
+        (to && !dateRegex.test(to))
+    ) {
+
+        return jsonResponse(
+            {
+                success: false,
+                error:
+                    "Invalid date format. Use YYYY-MM-DD."
+            },
+            400,
+            corsHeaders
+        );
+    }
+
+
+    if (from && to && from > to) {
+
+        return jsonResponse(
+            {
+                success: false,
+                error:
+                    "The 'from' date cannot be later than the 'to' date."
+            },
+            400,
+            corsHeaders
+        );
+    }
+
+
+    /*
+    ==========================================
     Variables
     ==========================================
     */
@@ -1897,7 +1602,7 @@ async function handleGetReportAlerts(
     */
 
     if (
-        !source ||
+        source &&
         source.toLowerCase() === "cyera"
     ) {
 
@@ -1909,7 +1614,7 @@ async function handleGetReportAlerts(
 
 
         /*
-        Severity filter
+        Severity
         */
 
         if (severity) {
@@ -1923,7 +1628,7 @@ async function handleGetReportAlerts(
 
 
         /*
-        Status filter
+        Status
         */
 
         if (status) {
@@ -1937,7 +1642,7 @@ async function handleGetReportAlerts(
 
 
         /*
-        Assigned user filter
+        Assigned user
         */
 
         if (assignedUser) {
@@ -1959,9 +1664,7 @@ async function handleGetReportAlerts(
                     ) = LOWER(?)
                 `;
 
-                params.push(
-                    assignedUser
-                );
+                params.push(assignedUser);
             }
         }
 
@@ -1972,39 +1675,51 @@ async function handleGetReportAlerts(
 
         if (search) {
 
-            const searchValue =
-                `%${search}%`;
-
             where += `
                 AND (
-                    LOWER(
-                        COALESCE(
-                            assigned_user_email,
-                            ''
-                        )
-                    ) LIKE LOWER(?)
-
-                    OR LOWER(
-                        COALESCE(
-                            severity,
-                            ''
-                        )
-                    ) LIKE LOWER(?)
-
-                    OR LOWER(
-                        COALESCE(
-                            status,
-                            ''
-                        )
-                    ) LIKE LOWER(?)
+                    LOWER(name) LIKE LOWER(?)
+                    OR LOWER(alert_id) LIKE LOWER(?)
+                    OR LOWER(triggering_user) LIKE LOWER(?)
+                    OR LOWER(authenticated_user) LIKE LOWER(?)
+                    OR LOWER(policy_name) LIKE LOWER(?)
                 )
             `;
+
+            const searchValue =
+                `%${search}%`;
 
             params.push(
                 searchValue,
                 searchValue,
+                searchValue,
+                searchValue,
                 searchValue
             );
+        }
+
+
+        /*
+        Date filter
+
+        Cyera uses timestamp.
+        */
+
+        if (from) {
+
+            where += `
+                AND DATE(timestamp) >= DATE(?)
+            `;
+
+            params.push(from);
+        }
+
+        if (to) {
+
+            where += `
+                AND DATE(timestamp) <= DATE(?)
+            `;
+
+            params.push(to);
         }
 
 
@@ -2015,8 +1730,7 @@ async function handleGetReportAlerts(
         const countResult =
             await env.DB
                 .prepare(`
-                    SELECT
-                        COUNT(*) AS total
+                    SELECT COUNT(*) AS total
                     FROM cyera_alerts
                     ${where}
                 `)
@@ -2055,11 +1769,8 @@ async function handleGetReportAlerts(
         alerts =
             (result.results || [])
                 .map(record => ({
-
                     source: "cyera",
-
                     ...record
-
                 }));
     }
 
@@ -2083,7 +1794,7 @@ async function handleGetReportAlerts(
 
 
         /*
-        Severity filter
+        Severity
         */
 
         if (severity) {
@@ -2097,7 +1808,7 @@ async function handleGetReportAlerts(
 
 
         /*
-        Status filter
+        Status
         */
 
         if (status) {
@@ -2116,31 +1827,47 @@ async function handleGetReportAlerts(
 
         if (search) {
 
-            const searchValue =
-                `%${search}%`;
-
             where += `
                 AND (
-                    LOWER(
-                        COALESCE(
-                            severity,
-                            ''
-                        )
-                    ) LIKE LOWER(?)
-
-                    OR LOWER(
-                        COALESCE(
-                            status,
-                            ''
-                        )
-                    ) LIKE LOWER(?)
+                    LOWER(alert_name) LIKE LOWER(?)
+                    OR LOWER(user) LIKE LOWER(?)
+                    OR LOWER(location) LIKE LOWER(?)
                 )
             `;
 
+            const searchValue =
+                `%${search}%`;
+
             params.push(
+                searchValue,
                 searchValue,
                 searchValue
             );
+        }
+
+
+        /*
+        Date filter
+
+        Purview uses time_detected.
+        */
+
+        if (from) {
+
+            where += `
+                AND DATE(time_detected) >= DATE(?)
+            `;
+
+            params.push(from);
+        }
+
+        if (to) {
+
+            where += `
+                AND DATE(time_detected) <= DATE(?)
+            `;
+
+            params.push(to);
         }
 
 
@@ -2151,8 +1878,7 @@ async function handleGetReportAlerts(
         const countResult =
             await env.DB
                 .prepare(`
-                    SELECT
-                        COUNT(*) AS total
+                    SELECT COUNT(*) AS total
                     FROM purview_alerts
                     ${where}
                 `)
@@ -2191,18 +1917,15 @@ async function handleGetReportAlerts(
         alerts =
             (result.results || [])
                 .map(record => ({
-
                     source: "purview",
-
                     ...record
-
                 }));
     }
 
 
     /*
     ==========================================
-    Source is required
+    Source required
     ==========================================
     */
 
@@ -2252,17 +1975,19 @@ async function handleGetReportAlerts(
                     report.report_id,
 
                 reportDate:
-                    report.report_date
+                    report.report_date,
 
+                reportingFrom:
+                    report.reporting_from || null,
+
+                reportingTo:
+                    report.reporting_to || null
             },
 
             source:
                 source.toLowerCase(),
 
             filters: {
-
-                search:
-                    search || null,
 
                 severity:
                     severity || null,
@@ -2271,8 +1996,16 @@ async function handleGetReportAlerts(
                     status || null,
 
                 assignedUser:
-                    assignedUser || null
+                    assignedUser || null,
 
+                search:
+                    search || null,
+
+                from:
+                    from || null,
+
+                to:
+                    to || null
             },
 
             pagination: {
@@ -2290,7 +2023,6 @@ async function handleGetReportAlerts(
 
                 hasPreviousPage:
                     page > 1
-
             },
 
             alerts
