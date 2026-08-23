@@ -367,170 +367,851 @@ async function handleCreateReport(
         .run();
 
 
-    /*
-    ==========================================
-    INSERT CYERA
-    ==========================================
-    */
+  /*
+==========================================
+PROCESS CYERA
+==========================================
+*/
 
-    for (let i = 0; i < cyeraRecords.length; i++) {
+let newCyera = 0;
+let carriedOverCyera = 0;
+let resolvedCyera = 0;
 
-        const alert = cyeraRecords[i];
+for (
+    let i = 0;
+    i < cyeraRecords.length;
+    i++
+) {
 
-        console.log(
-            `Processing Cyera alert ${i + 1}/${cyeraRecords.length}`,
-            alert.id
+    const alert =
+        cyeraRecords[i];
+
+    const source =
+        "cyera";
+
+    const externalAlertId =
+        String(
+            alert.id || ""
+        ).trim();
+
+    if (!externalAlertId) {
+
+        console.warn(
+            `Skipping Cyera alert ${i + 1}: missing alert ID`
         );
 
-        try {
+        continue;
+    }
 
-            await env.DB
-                .prepare(`
-                INSERT INTO cyera_alerts (
+    const observedAt =
+        alert.timestamp ||
+        alert.updatedAt ||
+        new Date().toISOString();
 
-                    report_id,
+    const severity =
+        alert.severity || null;
 
-                    alert_id,
-                    name,
+    const status =
+        alert.status || null;
 
-                    timestamp,
-                    updated_at,
+    const assignedUser =
+        alert.assignedUserEmail || null;
 
-                    severity,
-                    original_severity,
-                    external_severity,
+    /*
+    ------------------------------------------
+    Save raw report snapshot
+    ------------------------------------------
+    */
 
-                    status,
-                    status_updated_at,
+    await env.DB
+        .prepare(`
+            INSERT INTO cyera_alerts (
+                report_id,
+                alert_id,
+                name,
+                timestamp,
+                updated_at,
+                severity,
+                original_severity,
+                external_severity,
+                status,
+                status_updated_at,
+                assigned_user_email,
+                assigned_user_id,
+                triggering_user,
+                authenticated_user,
+                policy_id,
+                policy_name,
+                policy_type,
+                policy_action,
+                channel,
+                source_activity,
+                actual_action,
+                configured_action,
+                data_type
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?
+            )
+        `)
+        .bind(
+            reportId,
+            externalAlertId,
+            alert.name || null,
+            alert.timestamp || null,
+            alert.updatedAt || null,
+            alert.severity || null,
+            alert.originalSeverity || null,
+            alert.externalSeverity || null,
+            alert.status || null,
+            alert.statusUpdatedAt || null,
+            alert.assignedUserEmail || null,
+            alert.assignedUserId || null,
+            alert.triggeringUser || null,
+            alert.authenticatedUser || null,
+            alert.policy?.id || null,
+            alert.policy?.name || null,
+            alert.policy?.type || null,
+            alert.policy?.action || null,
+            alert.channel || null,
+            alert.sourceActivity || null,
+            alert.actualAction || null,
+            alert.configuredAction || null,
+            alert.dataType || null
+        )
+        .run();
 
-                    assigned_user_email,
-                    assigned_user_id,
 
-                    triggering_user,
-                    authenticated_user,
+    /*
+    ------------------------------------------
+    Find canonical alert
+    ------------------------------------------
+    */
 
-                    policy_id,
-                    policy_name,
-                    policy_type,
-                    policy_action,
+    let canonicalAlert =
+        await findCanonicalAlert(
+            env,
+            source,
+            externalAlertId
+        );
 
-                    channel,
 
-                    source_activity,
-                    actual_action,
-                    configured_action,
+    /*
+    ------------------------------------------
+    NEW ALERT
+    ------------------------------------------
+    */
 
-                    data_type
+    if (!canonicalAlert) {
 
-                )
-
-                VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
-                )
-            `)
-                .bind(
-
-                    reportId,
-
-                    alert.id || null,
-                    alert.name || null,
-
-                    alert.timestamp || null,
-                    alert.updatedAt || null,
-
-                    alert.severity || null,
-                    alert.originalSeverity || null,
-                    alert.externalSeverity || null,
-
-                    alert.status || null,
-                    alert.statusUpdatedAt || null,
-
-                    alert.assignedUserEmail || null,
-                    alert.assignedUserId || null,
-
-                    alert.triggeringUser || null,
-                    alert.authenticatedUser || null,
-
-                    alert.policy?.id || null,
-                    alert.policy?.name || null,
-                    alert.policy?.type || null,
-                    alert.policy?.action || null,
-
-                    alert.channel || null,
-
-                    alert.sourceActivity || null,
-                    alert.actualAction || null,
-                    alert.configuredAction || null,
-
-                    alert.dataType || null
-
-                )
-                .run();
-
-        } catch (error) {
-
-            console.error(
-                `CYERA INSERT FAILED AT RECORD ${i + 1}`,
+        const alertId =
+            await createCanonicalAlert(
+                env,
                 {
-                    alertId: alert.id,
-                    alertName: alert.name,
-                    error: String(error)
+                    source,
+                    externalAlertId,
+                    name: alert.name,
+                    severity,
+                    status,
+                    assignedUser,
+                    observedAt
                 }
             );
 
-            throw error;
-        }
+        await insertAlertHistory(
+            env,
+            {
+                alertId,
+                reportId,
+                observedAt,
+                severity,
+                status,
+                assignedUser
+            }
+        );
+
+        newCyera++;
+
+        continue;
     }
+
 
     /*
-    ==========================================
-    INSERT PURVIEW
-    ==========================================
+    ------------------------------------------
+    EXISTING ALERT
+    ------------------------------------------
     */
 
-    for (const alert of purviewRecords) {
+    const previous =
+        await getPreviousAlertHistory(
+            env,
+            canonicalAlert.id,
+            reportId
+        );
 
-        await env.DB
-            .prepare(`
-                INSERT INTO purview_alerts (
 
-                    report_id,
+    /*
+    Was this alert previously unresolved?
+    */
+    const wasPreviouslyResolved =
+        isResolvedStatus(
+            previous?.status
+        );
 
-                    alert_name,
-                    severity,
-                    status,
 
-                    time_detected,
+    const currentlyResolved =
+        isResolvedStatus(
+            status
+        );
 
-                    user,
-                    location
 
-                )
+    /*
+    ------------------------------------------
+    RESOLVED TODAY
+    ------------------------------------------
+    */
 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `)
-            .bind(
+    if (
+        currentlyResolved &&
+        previous &&
+        !wasPreviouslyResolved
+    ) {
 
-                reportId,
-
-                alert.alertName || null,
-
-                alert.severity || null,
-
-                alert.status || null,
-
-                alert.timeDetected || null,
-
-                alert.user || null,
-
-                alert.location || null
-
-            )
-            .run();
+        resolvedCyera++;
     }
 
+
+    /*
+    ------------------------------------------
+    CARRIED OVER
+    ------------------------------------------
+    */
+
+    if (
+        previous &&
+        !currentlyResolved
+    ) {
+
+        carriedOverCyera++;
+    }
+
+
+    /*
+    ------------------------------------------
+    UPDATE CANONICAL ALERT
+    ------------------------------------------
+    */
+
+    await updateCanonicalAlert(
+        env,
+        {
+            id: canonicalAlert.id,
+            name: alert.name,
+            severity,
+            status,
+            assignedUser,
+            observedAt,
+            resolvedAt:
+                currentlyResolved
+                    ? observedAt
+                    : null
+        }
+    );
+
+
+    /*
+    ------------------------------------------
+    ADD HISTORY
+    ------------------------------------------
+    */
+
+    await insertAlertHistory(
+        env,
+        {
+            alertId:
+                canonicalAlert.id,
+
+            reportId,
+
+            observedAt,
+
+            severity,
+
+            status,
+
+            assignedUser
+        }
+    );
+}
+
+
+/*
+==========================================
+PROCESS PURVIEW
+==========================================
+*/
+
+let newPurview = 0;
+let carriedOverPurview = 0;
+let resolvedPurview = 0;
+
+for (
+    let i = 0;
+    i < purviewRecords.length;
+    i++
+) {
+
+    const alert =
+        purviewRecords[i];
+
+    const source =
+        "purview";
+
+
+    /*
+    ------------------------------------------
+    Generate deterministic Purview ID
+    ------------------------------------------
+    */
+
+    const externalAlertId =
+        await generatePurviewAlertId(
+            alert
+        );
+
+
+    const observedAt =
+        alert.timeDetected ||
+        new Date().toISOString();
+
+    const severity =
+        alert.severity || null;
+
+    const status =
+        alert.status || null;
+
+
+    /*
+    IMPORTANT:
+
+    Purview's "user" is the person associated
+    with the DLP event, NOT our analyst.
+
+    Therefore it must NOT become
+    current_assigned_user.
+    */
+
+    const assignedUser =
+        null;
+
+
+    /*
+    ------------------------------------------
+    Save raw report snapshot
+    ------------------------------------------
+    */
+
+    await env.DB
+        .prepare(`
+            INSERT INTO purview_alerts (
+                report_id,
+                external_alert_id,
+                alert_name,
+                severity,
+                status,
+                time_detected,
+                user,
+                location
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+            reportId,
+            externalAlertId,
+            alert.alertName || null,
+            alert.severity || null,
+            alert.status || null,
+            alert.timeDetected || null,
+            alert.user || null,
+            alert.location || null
+        )
+        .run();
+
+
+    /*
+    ------------------------------------------
+    Find canonical alert
+    ------------------------------------------
+    */
+
+    let canonicalAlert =
+        await findCanonicalAlert(
+            env,
+            source,
+            externalAlertId
+        );
+
+
+    /*
+    ------------------------------------------
+    NEW ALERT
+    ------------------------------------------
+    */
+
+    if (!canonicalAlert) {
+
+        const alertId =
+            await createCanonicalAlert(
+                env,
+                {
+                    source,
+                    externalAlertId,
+                    name: alert.alertName,
+                    severity,
+                    status,
+                    assignedUser,
+                    observedAt
+                }
+            );
+
+
+        await insertAlertHistory(
+            env,
+            {
+                alertId,
+                reportId,
+                observedAt,
+                severity,
+                status,
+                assignedUser
+            }
+        );
+
+
+        newPurview++;
+
+        continue;
+    }
+
+
+    /*
+    ------------------------------------------
+    EXISTING ALERT
+    ------------------------------------------
+    */
+
+    const previous =
+        await getPreviousAlertHistory(
+            env,
+            canonicalAlert.id,
+            reportId
+        );
+
+
+    const wasPreviouslyResolved =
+        isResolvedStatus(
+            previous?.status
+        );
+
+
+    const currentlyResolved =
+        isResolvedStatus(
+            status
+        );
+
+
+    /*
+    ------------------------------------------
+    RESOLVED TODAY
+    ------------------------------------------
+    */
+
+    if (
+        currentlyResolved &&
+        previous &&
+        !wasPreviouslyResolved
+    ) {
+
+        resolvedPurview++;
+    }
+
+
+    /*
+    ------------------------------------------
+    CARRIED OVER
+    ------------------------------------------
+    */
+
+    if (
+        previous &&
+        !currentlyResolved
+    ) {
+
+        carriedOverPurview++;
+    }
+
+
+    /*
+    ------------------------------------------
+    UPDATE CANONICAL ALERT
+    ------------------------------------------
+    */
+
+    await updateCanonicalAlert(
+        env,
+        {
+            id: canonicalAlert.id,
+            name: alert.alertName,
+            severity,
+            status,
+            assignedUser,
+            observedAt,
+            resolvedAt:
+                currentlyResolved
+                    ? observedAt
+                    : null
+        }
+    );
+
+
+    /*
+    ------------------------------------------
+    ADD HISTORY
+    ------------------------------------------
+    */
+
+    await insertAlertHistory(
+        env,
+        {
+            alertId:
+                canonicalAlert.id,
+
+            reportId,
+
+            observedAt,
+
+            severity,
+
+            status,
+
+            assignedUser
+        }
+    );
+}
+    /*
+==========================================
+DAILY HISTORICAL METRICS
+==========================================
+*/
+
+await upsertHistoricalMetrics(
+    env,
+    {
+        metricDate:
+            report.reportDate,
+
+        source: "cyera",
+
+        totalAlerts:
+            cyeraRecords.length,
+
+        newCount:
+            newCyera,
+
+        carriedOverCount:
+            carriedOverCyera,
+
+        resolvedCount:
+            resolvedCyera
+    }
+);
+
+
+await upsertHistoricalMetrics(
+    env,
+    {
+        metricDate:
+            report.reportDate,
+
+        source: "purview",
+
+        totalAlerts:
+            purviewRecords.length,
+
+        newCount:
+            newPurview,
+
+        carriedOverCount:
+            carriedOverPurview,
+
+        resolvedCount:
+            resolvedPurview
+    }
+);
+    /*
+==========================================
+UPSERT HISTORICAL METRICS
+==========================================
+*/
+
+async function upsertHistoricalMetrics(
+    env,
+    {
+        metricDate,
+        source,
+        totalAlerts,
+        newCount,
+        carriedOverCount,
+        resolvedCount
+    }
+) {
+
+    await env.DB
+        .prepare(`
+            INSERT INTO historical_metrics (
+                metric_date,
+                source,
+                total_alerts,
+                new_count,
+                carried_over_count,
+                resolved_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+
+            ON CONFLICT (
+                metric_date,
+                source
+            )
+
+            DO UPDATE SET
+                total_alerts =
+                    excluded.total_alerts,
+
+                new_count =
+                    excluded.new_count,
+
+                carried_over_count =
+                    excluded.carried_over_count,
+
+                resolved_count =
+                    excluded.resolved_count
+        `)
+        .bind(
+            metricDate,
+            source,
+            totalAlerts || 0,
+            newCount || 0,
+            carriedOverCount || 0,
+            resolvedCount || 0
+        )
+        .run();
+}
+
+    /*
+==========================================
+90-DAY RETENTION
+==========================================
+*/
+
+const retentionResult =
+    await applyRetentionPolicy(
+        env
+    );
+
+console.log(
+    "RETENTION RESULT:",
+    retentionResult
+);
+    /*
+==========================================
+90-DAY RETENTION POLICY
+==========================================
+*/
+
+async function applyRetentionPolicy(
+    env
+) {
+
+    /*
+    Keep the most recent 90 days
+    based on report_date.
+    */
+
+    const cutoffResult =
+        await env.DB
+            .prepare(`
+                SELECT
+                    MIN(report_date) AS cutoff_date
+                FROM (
+                    SELECT report_date
+                    FROM reports
+                    ORDER BY report_date DESC
+                    LIMIT 90
+                )
+            `)
+            .first();
+
+
+    const cutoffDate =
+        cutoffResult?.cutoff_date;
+
+
+    if (!cutoffDate) {
+
+        return {
+            skipped: true,
+            reason: "No reports available"
+        };
+    }
+
+
+    /*
+    Delete history belonging to
+    reports older than cutoff.
+    */
+
+    const historyResult =
+        await env.DB
+            .prepare(`
+                DELETE FROM alert_history
+                WHERE report_id IN (
+                    SELECT report_id
+                    FROM reports
+                    WHERE report_date < ?
+                )
+            `)
+            .bind(cutoffDate)
+            .run();
+
+
+    /*
+    Delete Cyera snapshots.
+    */
+
+    const cyeraResult =
+        await env.DB
+            .prepare(`
+                DELETE FROM cyera_alerts
+                WHERE report_id IN (
+                    SELECT report_id
+                    FROM reports
+                    WHERE report_date < ?
+                )
+            `)
+            .bind(cutoffDate)
+            .run();
+
+
+    /*
+    Delete Purview snapshots.
+    */
+
+    const purviewResult =
+        await env.DB
+            .prepare(`
+                DELETE FROM purview_alerts
+                WHERE report_id IN (
+                    SELECT report_id
+                    FROM reports
+                    WHERE report_date < ?
+                )
+            `)
+            .bind(cutoffDate)
+            .run();
+
+
+    /*
+    Delete old reports.
+    */
+
+    const reportsResult =
+        await env.DB
+            .prepare(`
+                DELETE FROM reports
+                WHERE report_date < ?
+            `)
+            .bind(cutoffDate)
+            .run();
+
+
+    /*
+    Delete old historical metrics.
+    */
+
+    await env.DB
+        .prepare(`
+            DELETE FROM historical_metrics
+            WHERE metric_date < ?
+        `)
+        .bind(cutoffDate)
+        .run();
+
+
+    /*
+    Remove canonical alerts that have
+    no remaining history.
+
+    This is important for D1 storage.
+    */
+
+    await env.DB
+        .prepare(`
+            DELETE FROM alerts
+            WHERE id NOT IN (
+                SELECT DISTINCT alert_id
+                FROM alert_history
+            )
+        `)
+        .run();
+
+
+    /*
+    Record cleanup.
+    */
+
+    await env.DB
+        .prepare(`
+            INSERT INTO retention_log (
+                cleanup_date,
+                cutoff_date,
+                reports_deleted,
+                cyera_deleted,
+                purview_deleted,
+                history_deleted
+            )
+            VALUES (
+                CURRENT_TIMESTAMP,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?
+            )
+        `)
+        .bind(
+            cutoffDate,
+            reportsResult.meta?.changes || 0,
+            cyeraResult.meta?.changes || 0,
+            purviewResult.meta?.changes || 0,
+            historyResult.meta?.changes || 0
+        )
+        .run();
+
+
+    return {
+        cutoffDate,
+        reportsDeleted:
+            reportsResult.meta?.changes || 0,
+        cyeraDeleted:
+            cyeraResult.meta?.changes || 0,
+        purviewDeleted:
+            purviewResult.meta?.changes || 0,
+        historyDeleted:
+            historyResult.meta?.changes || 0
+    };
+}
 
     /*
     ==========================================
@@ -2427,6 +3108,287 @@ async function handleGetReportAlerts(
 
         corsHeaders
     );
+}
+
+/*
+==========================================
+ALERT HISTORY HELPERS
+==========================================
+*/
+
+/*
+Generate a stable fingerprint for Purview alerts.
+
+Purview does not provide a stable alert ID in
+the source CSV, so we combine the fields that
+identify the individual detection.
+*/
+async function generatePurviewAlertId(alert) {
+
+    const raw = [
+        alert.alertName || "",
+        alert.timeDetected || "",
+        alert.user || "",
+        alert.location || ""
+    ]
+        .map(value => String(value).trim().toLowerCase())
+        .join("|");
+
+    const encoder = new TextEncoder();
+
+    const data =
+        encoder.encode(raw);
+
+    const hashBuffer =
+        await crypto.subtle.digest(
+            "SHA-256",
+            data
+        );
+
+    const hashArray =
+        Array.from(
+            new Uint8Array(hashBuffer)
+        );
+
+    const hash =
+        hashArray
+            .map(byte =>
+                byte
+                    .toString(16)
+                    .padStart(2, "0")
+            )
+            .join("");
+
+    return `purview:${hash}`;
+}
+
+
+/*
+Normalize status values so that
+"Resolved", "resolved", etc. are
+treated consistently.
+*/
+function normalizeAlertStatus(status) {
+
+    return String(
+        status || ""
+    )
+        .trim()
+        .toLowerCase();
+}
+
+
+/*
+Determine whether an alert is resolved.
+*/
+function isResolvedStatus(status) {
+
+    const normalized =
+        normalizeAlertStatus(status);
+
+    return [
+        "resolved",
+        "closed",
+        "complete",
+        "completed"
+    ].includes(normalized);
+}
+
+
+/*
+Find an existing canonical alert.
+*/
+async function findCanonicalAlert(
+    env,
+    source,
+    externalAlertId
+) {
+
+    return await env.DB
+        .prepare(`
+            SELECT *
+            FROM alerts
+            WHERE source = ?
+              AND external_alert_id = ?
+            LIMIT 1
+        `)
+        .bind(
+            source,
+            externalAlertId
+        )
+        .first();
+}
+
+
+/*
+Create a canonical alert.
+*/
+async function createCanonicalAlert(
+    env,
+    {
+        source,
+        externalAlertId,
+        name,
+        severity,
+        status,
+        assignedUser,
+        observedAt
+    }
+) {
+
+    const result =
+        await env.DB
+            .prepare(`
+                INSERT INTO alerts (
+                    source,
+                    external_alert_id,
+                    name,
+                    current_severity,
+                    current_status,
+                    current_assigned_user,
+                    first_seen_at,
+                    last_seen_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `)
+            .bind(
+                source,
+                externalAlertId,
+                name || null,
+                severity || null,
+                status || null,
+                assignedUser || null,
+                observedAt,
+                observedAt
+            )
+            .run();
+
+    return result.meta?.last_row_id;
+}
+
+
+/*
+Update an existing canonical alert.
+*/
+async function updateCanonicalAlert(
+    env,
+    {
+        id,
+        name,
+        severity,
+        status,
+        assignedUser,
+        observedAt,
+        resolvedAt
+    }
+) {
+
+    await env.DB
+        .prepare(`
+            UPDATE alerts
+            SET
+                name = ?,
+                current_severity = ?,
+                current_status = ?,
+                current_assigned_user = ?,
+                last_seen_at = ?,
+                resolved_at = COALESCE(?, resolved_at),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `)
+        .bind(
+            name || null,
+            severity || null,
+            status || null,
+            assignedUser || null,
+            observedAt,
+            resolvedAt || null,
+            id
+        )
+        .run();
+}
+
+
+/*
+Add a historical observation.
+
+UNIQUE(alert_id, report_id) prevents the
+same alert from being recorded twice for
+the same report.
+*/
+async function insertAlertHistory(
+    env,
+    {
+        alertId,
+        reportId,
+        observedAt,
+        severity,
+        status,
+        assignedUser
+    }
+) {
+
+    await env.DB
+        .prepare(`
+            INSERT OR IGNORE INTO alert_history (
+                alert_id,
+                report_id,
+                observed_at,
+                severity,
+                status,
+                assigned_user
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+            alertId,
+            reportId,
+            observedAt,
+            severity || null,
+            status || null,
+            assignedUser || null
+        )
+        .run();
+}
+
+
+/*
+Get the previous observation for an alert.
+
+This is used to determine whether the
+current observation is:
+
+NEW
+or
+CARRIED OVER
+or
+RESOLVED
+*/
+async function getPreviousAlertHistory(
+    env,
+    alertId,
+    reportId
+) {
+
+    return await env.DB
+        .prepare(`
+            SELECT
+                severity,
+                status,
+                assigned_user,
+                observed_at,
+                report_id
+            FROM alert_history
+            WHERE alert_id = ?
+              AND report_id != ?
+            ORDER BY observed_at DESC
+            LIMIT 1
+        `)
+        .bind(
+            alertId,
+            reportId
+        )
+        .first();
 }
 
 /*
