@@ -228,16 +228,15 @@ export default {
                     return new Response(
                         JSON.stringify({
                             success: false,
-                            error:
-                                "Failed to generate security intelligence.",
-                            errorName:
-                                error?.name || "Error"
+                            error: "Failed to generate security intelligence.",
+                            errorName: error?.name || "UnknownError",
+                            errorMessage: error?.message || String(error),
+                            stack: error?.stack || null
                         }),
                         {
                             status: 500,
                             headers: {
-                                "Content-Type":
-                                    "application/json",
+                                "Content-Type": "application/json",
                                 ...corsHeaders
                             }
                         }
@@ -748,7 +747,7 @@ async function handleCreateReport(
                     alert.dataType || null
 
                 )
-                              .run();
+                .run();
 
 
             /*
