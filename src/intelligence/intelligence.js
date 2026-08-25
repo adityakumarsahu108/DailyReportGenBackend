@@ -499,6 +499,466 @@ async function getCyeraLifecycle(env, reportId) {
 }
 /*
 ==========================================
+PHASE 4
+CYERA SECURITY INTELLIGENCE
+DETERMINISTIC ANALYSIS
+==========================================
+*/
+
+async function calculateCyeraSecurityIntelligence(
+    env,
+    reportId
+) {
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+                alert_id,
+                name,
+                triggering_user,
+                policy_id,
+                source_activity,
+                channel,
+                severity,
+                status,
+                assigned_user_email,
+                timestamp,
+                updated_at
+            FROM cyera_alerts
+            WHERE report_id = ?
+        `)
+        .bind(reportId)
+        .all();
+
+    const alerts = result.results || [];
+
+    /*
+    ==========================================
+    HELPERS
+    ==========================================
+    */
+
+    const countBy = (items, key) => {
+
+        const counts = {};
+
+        for (const item of items) {
+
+            const value =
+                item[key] ||
+                "unknown";
+
+            counts[value] =
+                (counts[value] || 0) + 1;
+        }
+
+        return counts;
+    };
+
+
+    const sortCounts = (counts) => {
+
+        return Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([value, count]) => ({
+                value,
+                count
+            }));
+    };
+
+
+    /*
+    ==========================================
+    DISTRIBUTIONS
+    ==========================================
+    */
+
+    const severityDistribution =
+        sortCounts(
+            countBy(alerts, "severity")
+        );
+
+    const statusDistribution =
+        sortCounts(
+            countBy(alerts, "status")
+        );
+
+    const channelDistribution =
+        sortCounts(
+            countBy(alerts, "channel")
+        );
+
+    const activityDistribution =
+        sortCounts(
+            countBy(alerts, "source_activity")
+        );
+
+    const policyDistribution =
+        sortCounts(
+            countBy(alerts, "policy_id")
+        );
+
+    const userDistribution =
+        sortCounts(
+            countBy(alerts, "triggering_user")
+        );
+
+
+    /*
+    ==========================================
+    EXTERNAL / ASSIGNED ACTIVITY
+    ==========================================
+    */
+
+    const assignedAlerts =
+        alerts.filter(
+            alert =>
+                alert.assigned_user_email
+        );
+
+    const unassignedAlerts =
+        alerts.filter(
+            alert =>
+                !alert.assigned_user_email
+        );
+
+
+    /*
+    ==========================================
+    RISK ACCEPTED
+    ==========================================
+    */
+
+    const riskAcceptedAlerts =
+        alerts.filter(
+            alert =>
+                String(alert.status)
+                    .toLowerCase()
+                === "riskaccepted"
+        );
+
+
+    /*
+    ==========================================
+    HIGH / CRITICAL
+    ==========================================
+    */
+
+    const highRiskAlerts =
+        alerts.filter(alert => {
+
+            const severity =
+                String(alert.severity || "")
+                    .toLowerCase();
+
+            return (
+                severity === "high" ||
+                severity === "critical"
+            );
+        });
+
+
+    /*
+    ==========================================
+    FINDINGS
+    ==========================================
+    */
+
+    const findings = [];
+
+
+    /*
+    ------------------------------------------
+    HIGH / CRITICAL ACTIVITY
+    ------------------------------------------
+    */
+
+    if (highRiskAlerts.length > 0) {
+
+        findings.push({
+
+            type:
+                "high_risk_activity",
+
+            severity:
+                "high",
+
+            title:
+                "High-risk alerts require attention",
+
+            description:
+                `${highRiskAlerts.length} high or critical severity alerts are present in the current Cyera report.`,
+
+            evidence: {
+
+                alertCount:
+                    highRiskAlerts.length
+
+            },
+
+            recommendedAction:
+                "Prioritize review of high and critical severity alerts before lower-risk activity."
+        });
+    }
+
+
+    /*
+    ------------------------------------------
+    RISK ACCEPTED
+    ------------------------------------------
+    */
+
+    if (riskAcceptedAlerts.length > 0) {
+
+        findings.push({
+
+            type:
+                "risk_accepted_activity",
+
+            severity:
+                "medium",
+
+            title:
+                "Risk-accepted alerts detected",
+
+            description:
+                `${riskAcceptedAlerts.length} alerts are currently marked as risk accepted.`,
+
+            evidence: {
+
+                alertCount:
+                    riskAcceptedAlerts.length,
+
+                percentage:
+                    alerts.length > 0
+                        ? Number(
+                            (
+                                riskAcceptedAlerts.length /
+                                alerts.length *
+                                100
+                            ).toFixed(1)
+                        )
+                        : 0
+            },
+
+            recommendedAction:
+                "Periodically validate risk-accepted alerts to ensure the business justification remains valid."
+        });
+    }
+
+
+    /*
+    ------------------------------------------
+    UNASSIGNED ALERTS
+    ------------------------------------------
+    */
+
+    if (unassignedAlerts.length > 0) {
+
+        findings.push({
+
+            type:
+                "unassigned_alerts",
+
+            severity:
+                unassignedAlerts.length >= 10
+                    ? "medium"
+                    : "low",
+
+            title:
+                "Alerts remain unassigned",
+
+            description:
+                `${unassignedAlerts.length} alerts currently have no assigned user.`,
+
+            evidence: {
+
+                alertCount:
+                    unassignedAlerts.length
+
+            },
+
+            recommendedAction:
+                "Review unassigned alerts and route actionable cases to the appropriate security owner."
+        });
+    }
+
+
+    /*
+    ------------------------------------------
+    DOMINANT CHANNEL
+    ------------------------------------------
+    */
+
+    if (channelDistribution.length > 0) {
+
+        const topChannel =
+            channelDistribution[0];
+
+        const percentage =
+            alerts.length > 0
+                ? Number(
+                    (
+                        topChannel.count /
+                        alerts.length *
+                        100
+                    ).toFixed(1)
+                )
+                : 0;
+
+        if (percentage >= 50) {
+
+            findings.push({
+
+                type:
+                    "channel_concentration",
+
+                severity:
+                    "medium",
+
+                title:
+                    "Security activity is concentrated in one channel",
+
+                description:
+                    `${percentage}% of current alerts originate from the ${topChannel.value} channel.`,
+
+                evidence: {
+
+                    channel:
+                        topChannel.value,
+
+                    alertCount:
+                        topChannel.count,
+
+                    percentage
+
+                },
+
+                recommendedAction:
+                    "Review the dominant channel for recurring patterns and determine whether additional preventive controls are appropriate."
+            });
+        }
+    }
+
+
+    /*
+    ------------------------------------------
+    DOMINANT POLICY
+    ------------------------------------------
+    */
+
+    if (policyDistribution.length > 0) {
+
+        const topPolicy =
+            policyDistribution[0];
+
+        const percentage =
+            alerts.length > 0
+                ? Number(
+                    (
+                        topPolicy.count /
+                        alerts.length *
+                        100
+                    ).toFixed(1)
+                )
+                : 0;
+
+        if (percentage >= 25) {
+
+            findings.push({
+
+                type:
+                    "policy_concentration",
+
+                severity:
+                    "medium",
+
+                title:
+                    "Alert volume is concentrated around a policy",
+
+                description:
+                    `${percentage}% of current alerts are associated with the same Cyera policy.`,
+
+                evidence: {
+
+                    policyId:
+                        topPolicy.value,
+
+                    alertCount:
+                        topPolicy.count,
+
+                    percentage
+
+                },
+
+                recommendedAction:
+                    "Review the policy generating the highest alert volume to determine whether the activity reflects genuine risk or excessive detection noise."
+            });
+        }
+    }
+
+
+    /*
+    ==========================================
+    RETURN
+    ==========================================
+    */
+
+    return {
+
+        reportId,
+
+        totalAlerts:
+            alerts.length,
+
+        distributions: {
+
+            severity:
+                severityDistribution,
+
+            status:
+                statusDistribution,
+
+            channel:
+                channelDistribution,
+
+            activity:
+                activityDistribution,
+
+            policy:
+                policyDistribution.slice(0, 10),
+
+            users:
+                userDistribution.slice(0, 10)
+
+        },
+
+        workload: {
+
+            assigned:
+                assignedAlerts.length,
+
+            unassigned:
+                unassignedAlerts.length,
+
+            riskAccepted:
+                riskAcceptedAlerts.length
+
+        },
+
+        risk: {
+
+            highOrCritical:
+                highRiskAlerts.length
+
+        },
+
+        findings
+
+    };
+}
+/*
+==========================================
 CYERA ALERT AGING / PERSISTENCE
 ==========================================
 */
@@ -1790,10 +2250,10 @@ export async function generateSecurityIntelligence(env) {
     */
 
     const lifecycle = await calculateAlertLifecycle(
-    env,
-    reportId,
-    previousReport.report_id
-);
+        env,
+        reportId,
+        previousReport.report_id
+    );
 
 
     /*
@@ -1909,6 +2369,47 @@ CYERA ALERT AGING / PERSISTENCE
         });
 
     }
+
+    /*
+==========================================
+PHASE 4
+CYERA SECURITY INTELLIGENCE
+==========================================
+*/
+
+    const securityIntelligence =
+        await calculateCyeraSecurityIntelligence(
+            env,
+            reportId
+        );
+
+
+    /*
+    ==========================================
+    SECURITY INTELLIGENCE INSIGHTS
+    ==========================================
+    */
+
+    for (
+        const finding of securityIntelligence.findings
+    ) {
+
+        insights.push({
+
+            type:
+                finding.type,
+
+            priority:
+                finding.severity,
+
+            metric:
+                finding.evidence?.alertCount || 0,
+
+            message:
+                finding.description
+
+        });
+    }
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -1955,6 +2456,7 @@ CYERA ALERT AGING / PERSISTENCE
         comparison,
         lifecycle,
         aging,
+        securityIntelligence,
         insights
 
     };
