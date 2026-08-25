@@ -634,7 +634,7 @@ async function calculateCyeraSecurityIntelligence(
             alert =>
                 String(alert.status)
                     .toLowerCase()
-                === "riskaccepted"
+                    === "riskaccepted"
         );
 
 
@@ -2250,10 +2250,10 @@ export async function generateSecurityIntelligence(env) {
     */
 
     const lifecycle = await calculateAlertLifecycle(
-        env,
-        reportId,
-        previousReport.report_id
-    );
+    env,
+    reportId,
+    previousReport.report_id
+);
 
 
     /*
@@ -2377,39 +2377,39 @@ CYERA SECURITY INTELLIGENCE
 ==========================================
 */
 
-    const securityIntelligence =
-        await calculateCyeraSecurityIntelligence(
-            env,
-            reportId
-        );
+const securityIntelligence =
+    await calculateCyeraSecurityIntelligence(
+        env,
+        reportId
+    );
 
 
-    /*
-    ==========================================
-    SECURITY INTELLIGENCE INSIGHTS
-    ==========================================
-    */
+/*
+==========================================
+SECURITY INTELLIGENCE INSIGHTS
+==========================================
+*/
 
-    for (
-        const finding of securityIntelligence.findings
-    ) {
+for (
+    const finding of securityIntelligence.findings
+) {
 
-        insights.push({
+    insights.push({
 
-            type:
-                finding.type,
+        type:
+            finding.type,
 
-            priority:
-                finding.severity,
+        priority:
+            finding.severity,
 
-            metric:
-                finding.evidence?.alertCount || 0,
+        metric:
+            finding.evidence?.alertCount || 0,
 
-            message:
-                finding.description
+        message:
+            finding.description
 
-        });
-    }
+    });
+}
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
