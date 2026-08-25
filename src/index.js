@@ -184,18 +184,13 @@ export default {
                     corsHeaders
                 );
             }
-
-            /*
-==========================================
-SECURITY INTELLIGENCE
-==========================================
-*/
+            // ==========================================
+            // SECURITY INTELLIGENCE
+            // ==========================================
 
             if (
-                path ===
-                "/api/v1/intelligence/summary"
-                &&
-                request.method === "GET"
+                request.method === "GET" &&
+                url.pathname === "/api/v1/intelligence/summary"
             ) {
 
                 try {
@@ -215,7 +210,8 @@ SECURITY INTELLIGENCE
                             status: 200,
                             headers: {
                                 "Content-Type":
-                                    "application/json"
+                                    "application/json",
+                                ...corsHeaders
                             }
                         }
                     );
@@ -233,13 +229,16 @@ SECURITY INTELLIGENCE
                         JSON.stringify({
                             success: false,
                             error:
-                                "Failed to generate security intelligence."
+                                "Failed to generate security intelligence.",
+                            errorName:
+                                error?.name || "Error"
                         }),
                         {
                             status: 500,
                             headers: {
                                 "Content-Type":
-                                    "application/json"
+                                    "application/json",
+                                ...corsHeaders
                             }
                         }
                     );
@@ -247,7 +246,6 @@ SECURITY INTELLIGENCE
                 }
 
             }
-
             /*
             ==========================================
             ROUTE NOT FOUND
