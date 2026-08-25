@@ -59,40 +59,7 @@ function getAlertFingerprint(alert) {
 }
 
 
-/*
-==========================================
-ALERT FINGERPRINT
-==========================================
-*/
 
-function getAlertFingerprint(alert) {
-
-    const values = [
-        alert.name,
-        alert.triggering_user,
-        alert.policy_id,
-        alert.source_activity,
-        alert.channel
-    ];
-
-    const normalized = values.map(value =>
-        String(value || "")
-            .trim()
-            .toLowerCase()
-    );
-
-    // If there is not enough identifying information,
-    // don't attempt to match the alert.
-    if (
-        !normalized[0] &&
-        !normalized[1] &&
-        !normalized[2]
-    ) {
-        return null;
-    }
-
-    return normalized.join("|");
-}
 /*
 ==========================================
 ALERT LIFECYCLE
