@@ -389,51 +389,257 @@ export async function generateSecurityIntelligence(env) {
             unassignedResult?.count || 0
         );
 
+/*
+==========================================
+GENERATE BASIC INSIGHTS
+==========================================
+*/
 
-    /*
-    ==========================================
-    RETURN SECURITY INTELLIGENCE
-    ==========================================
-    */
+const totalAlerts =
+    cyeraTotal +
+    purviewTotal;
 
-    return {
 
-        generatedAt:
-            new Date().toISOString(),
+const insights = [];
 
-        report: {
 
-            reportId:
-                latestReport.report_id,
+/*
+------------------------------------------
+CRITICAL ALERTS
+------------------------------------------
+*/
 
-            reportDate:
-                latestReport.report_date,
+if (severity.critical > 0) {
 
-            generatedAt:
-                latestReport.generated_at
+    insights.push({
 
-        },
+        type: "critical",
 
-        alerts: {
+        priority: "high",
 
-            total:
-                cyeraTotal +
-                purviewTotal,
+        metric:
+            severity.critical,
 
-            cyera:
-                cyeraTotal,
+        message:
+            `${severity.critical} critical ${
+                severity.critical === 1
+                    ? "alert requires"
+                    : "alerts require"
+            } attention.`
 
-            purview:
-                purviewTotal,
+    });
 
+}
+
+
+/*
+------------------------------------------
+HIGH-SEVERITY ALERTS
+------------------------------------------
+*/
+
+if (severity.high > 0) {
+
+    insights.push({
+
+        type: "severity",
+
+        priority: "high",
+
+        metric:
+            severity.high,
+
+        message:
+            `${severity.high} high-severity ${
+                severity.high === 1
+                    ? "alert is"
+                    : "alerts are"
+            } currently present.`
+
+    });
+
+}
+
+
+/*
+------------------------------------------
+MEDIUM-SEVERITY CONCENTRATION
+------------------------------------------
+*/
+
+if (totalAlerts > 0) {
+
+    const mediumPercentage =
+        Math.round(
+            (
+                severity.medium /
+                totalAlerts
+            ) * 100
+        );
+
+
+    if (mediumPercentage >= 70) {
+
+        insights.push({
+
+            type: "severity_concentration",
+
+            priority: "medium",
+
+            metric: mediumPercentage,
+
+            message:
+                `Medium-severity alerts account for approximately ${mediumPercentage}% of the current alert volume.`
+
+        });
+
+    }
+
+}
+
+
+/*
+------------------------------------------
+RESOLUTION RATE
+------------------------------------------
+*/
+
+if (totalAlerts > 0) {
+
+    const resolved =
+        status.resolved || 0;
+
+
+    const resolutionPercentage =
+        Math.round(
+            (
+                resolved /
+                totalAlerts
+            ) * 100
+        );
+
+
+    if (resolutionPercentage < 25) {
+
+        insights.push({
+
+            type: "resolution",
+
+            priority: "medium",
+
+            metric:
+                resolutionPercentage,
+
+            message:
+                `Only ${resolved} of ${totalAlerts} alerts are currently resolved (${resolutionPercentage}%).`
+
+        });
+
+    }
+
+}
+
+
+/*
+------------------------------------------
+UNASSIGNED ALERTS
+------------------------------------------
+*/
+
+if (unassigned > 0) {
+
+    insights.push({
+
+        type: "assignment",
+
+        priority:
+            unassigned >= 10
+                ? "high"
+                : "medium",
+
+        metric:
             unassigned,
 
-            severity,
+        message:
+            `${unassigned} alerts are currently unassigned to an analyst.`
 
-            status
+    });
 
-        }
+}
 
-    };
 
+/*
+------------------------------------------
+NO CRITICAL / HIGH ALERTS
+------------------------------------------
+*/
+
+if (
+    severity.critical === 0 &&
+    severity.high === 0 &&
+    totalAlerts > 0
+) {
+
+    insights.push({
+
+        type: "risk_observation",
+
+        priority: "low",
+
+        metric: 0,
+
+        message:
+            "No critical or high-severity alerts are present in the latest report."
+
+    });
+
+}
+
+
+/*
+==========================================
+RETURN SECURITY INTELLIGENCE
+==========================================
+*/
+
+return {
+
+    generatedAt:
+        new Date().toISOString(),
+
+    report: {
+
+        reportId:
+            latestReport.report_id,
+
+        reportDate:
+            latestReport.report_date,
+
+        generatedAt:
+            latestReport.generated_at
+
+    },
+
+    alerts: {
+
+        total:
+            totalAlerts,
+
+        cyera:
+            cyeraTotal,
+
+        purview:
+            purviewTotal,
+
+        unassigned,
+
+        severity,
+
+        status
+
+    },
+
+    insights
+
+};
 }
