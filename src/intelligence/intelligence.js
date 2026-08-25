@@ -19,7 +19,203 @@ logic is implemented.
 ==========================================
 */
 
+/*
+==========================================
+CYERA ALERT LIFECYCLE
+NEW VS CARRIED OVER
+==========================================
+*/
 
+async function getCyeraLifecycle(env, reportId) {
+
+    /*
+    ==========================================
+    GET CURRENT REPORT ALERTS
+    ==========================================
+    */
+
+    const currentResult = await env.DB
+        .prepare(`
+            SELECT DISTINCT
+                ah.alert_id
+            FROM alert_history ah
+            JOIN alerts a
+                ON a.id = ah.alert_id
+            WHERE
+                ah.report_id = ?
+                AND a.source = 'cyera'
+        `)
+        .bind(reportId)
+        .all();
+
+
+    const currentAlerts =
+        currentResult.results || [];
+
+
+    /*
+    ==========================================
+    FIND PREVIOUS REPORT
+    ==========================================
+    */
+
+    const previousReport = await env.DB
+        .prepare(`
+            SELECT
+                report_id,
+                report_date
+            FROM reports
+            WHERE report_date < (
+                SELECT report_date
+                FROM reports
+                WHERE report_id = ?
+            )
+            ORDER BY report_date DESC
+            LIMIT 1
+        `)
+        .bind(reportId)
+        .first();
+
+
+    /*
+    ==========================================
+    NO PREVIOUS REPORT
+    ==========================================
+    */
+
+    if (!previousReport) {
+
+        return {
+            currentReportId: reportId,
+            previousReportId: null,
+
+            currentAlerts: currentAlerts.length,
+
+            new: currentAlerts.length,
+
+            carriedOver: 0,
+
+            newPercentage:
+                currentAlerts.length > 0
+                    ? 100
+                    : 0,
+
+            carriedOverPercentage: 0
+        };
+    }
+
+
+    /*
+    ==========================================
+    GET PREVIOUS REPORT ALERTS
+    ==========================================
+    */
+
+    const previousResult = await env.DB
+        .prepare(`
+            SELECT DISTINCT
+                ah.alert_id
+            FROM alert_history ah
+            JOIN alerts a
+                ON a.id = ah.alert_id
+            WHERE
+                ah.report_id = ?
+                AND a.source = 'cyera'
+        `)
+        .bind(previousReport.report_id)
+        .all();
+
+
+    const previousAlerts =
+        previousResult.results || [];
+
+
+    /*
+    ==========================================
+    CREATE LOOKUP SET
+    ==========================================
+    */
+
+    const previousAlertIds =
+        new Set(
+            previousAlerts.map(
+                row => String(row.alert_id)
+            )
+        );
+
+
+    /*
+    ==========================================
+    CALCULATE LIFECYCLE
+    ==========================================
+    */
+
+    let newCount = 0;
+    let carriedOverCount = 0;
+
+
+    for (const alert of currentAlerts) {
+
+        const alertId =
+            String(alert.alert_id);
+
+
+        if (previousAlertIds.has(alertId)) {
+
+            carriedOverCount++;
+
+        } else {
+
+            newCount++;
+
+        }
+    }
+
+
+    const total =
+        currentAlerts.length;
+
+
+    const newPercentage =
+        total > 0
+            ? Number(
+                ((newCount / total) * 100)
+                    .toFixed(1)
+            )
+            : 0;
+
+
+    const carriedOverPercentage =
+        total > 0
+            ? Number(
+                ((carriedOverCount / total) * 100)
+                    .toFixed(1)
+            )
+            : 0;
+
+
+    return {
+
+        currentReportId:
+            reportId,
+
+        previousReportId:
+            previousReport.report_id,
+
+        currentAlerts:
+            total,
+
+        new:
+            newCount,
+
+        carriedOver:
+            carriedOverCount,
+
+        newPercentage,
+
+        carriedOverPercentage
+    };
+}
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -444,10 +640,9 @@ export async function generateSecurityIntelligence(env) {
                 severity.critical,
 
             message:
-                `${severity.critical} critical ${
-                    severity.critical === 1
-                        ? "alert requires"
-                        : "alerts require"
+                `${severity.critical} critical ${severity.critical === 1
+                    ? "alert requires"
+                    : "alerts require"
                 } attention.`
 
         });
@@ -473,10 +668,9 @@ export async function generateSecurityIntelligence(env) {
                 severity.high,
 
             message:
-                `${severity.high} high-severity ${
-                    severity.high === 1
-                        ? "alert is"
-                        : "alerts are"
+                `${severity.high} high-severity ${severity.high === 1
+                    ? "alert is"
+                    : "alerts are"
                 } currently present.`
 
         });
@@ -907,10 +1101,9 @@ export async function generateSecurityIntelligence(env) {
                     cyeraPercentageChange,
 
                 message:
-                    `Cyera alert volume ${
-                        cyeraPercentageChange > 0
-                            ? "increased"
-                            : "decreased"
+                    `Cyera alert volume ${cyeraPercentageChange > 0
+                        ? "increased"
+                        : "decreased"
                     } by ${Math.abs(cyeraPercentageChange)}% compared with the previous report.`
 
             });
@@ -944,10 +1137,9 @@ export async function generateSecurityIntelligence(env) {
                     purviewPercentageChange,
 
                 message:
-                    `Purview alert volume ${
-                        purviewPercentageChange > 0
-                            ? "increased"
-                            : "decreased"
+                    `Purview alert volume ${purviewPercentageChange > 0
+                        ? "increased"
+                        : "decreased"
                     } by ${Math.abs(purviewPercentageChange)}% compared with the previous report.`
 
             });
@@ -956,7 +1148,69 @@ export async function generateSecurityIntelligence(env) {
 
     }
 
+    /*
+    ==========================================
+    PHASE 2
+    CYERA ALERT LIFECYCLE
+    NEW VS CARRIED OVER
+    ==========================================
+    */
 
+    const lifecycle =
+        await getCyeraLifecycle(
+            env,
+            reportId
+        );
+
+
+    /*
+    ==========================================
+    LIFECYCLE INSIGHTS
+    ==========================================
+    */
+
+    if (lifecycle.new > 0) {
+
+        insights.push({
+
+            type:
+                "new_alert_volume",
+
+            priority:
+                lifecycle.newPercentage >= 50
+                    ? "high"
+                    : "medium",
+
+            metric:
+                lifecycle.newPercentage,
+
+            message:
+                `${lifecycle.new} alerts are newly observed in the latest Cyera report.`
+        });
+
+    }
+
+
+    if (lifecycle.carriedOver > 0) {
+
+        insights.push({
+
+            type:
+                "carried_over",
+
+            priority:
+                lifecycle.carriedOverPercentage >= 70
+                    ? "high"
+                    : "medium",
+
+            metric:
+                lifecycle.carriedOverPercentage,
+
+            message:
+                `${lifecycle.carriedOver} alerts (${lifecycle.carriedOverPercentage}%) were carried over from the previous Cyera report.`
+        });
+
+    }
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -1001,7 +1255,7 @@ export async function generateSecurityIntelligence(env) {
         },
 
         comparison,
-
+        lifecycle,
         insights
 
     };
