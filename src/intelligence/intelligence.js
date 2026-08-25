@@ -1791,7 +1791,7 @@ export async function generateSecurityIntelligence(env) {
 
     const lifecycle = await calculateAlertLifecycle(
     env,
-    currentReportId,
+    reportId,
     previousReport.report_id
 );
 
