@@ -301,7 +301,225 @@ export default {
     }
 };
 
+/*
+==========================================
+UPSERT CANONICAL CYERA ALERT
+==========================================
+*/
 
+async function upsertCyeraAlert(
+    env,
+    alert,
+    reportId,
+    observedAt
+) {
+
+    const externalAlertId =
+        alert.id || null;
+
+    if (!externalAlertId) {
+
+        console.warn(
+            "Skipping canonical Cyera alert: missing alert.id",
+            alert.name
+        );
+
+        return null;
+    }
+
+
+    /*
+    ==========================================
+    CHECK EXISTING ALERT
+    ==========================================
+    */
+
+    const existing =
+        await env.DB
+            .prepare(`
+                SELECT
+                    id,
+                    first_seen_at
+                FROM alerts
+                WHERE
+                    source = 'cyera'
+                    AND external_alert_id = ?
+            `)
+            .bind(externalAlertId)
+            .first();
+
+
+    /*
+    ==========================================
+    NEW ALERT
+    ==========================================
+    */
+
+    if (!existing) {
+
+        const inserted =
+            await env.DB
+                .prepare(`
+                    INSERT INTO alerts (
+
+                        source,
+                        external_alert_id,
+                        name,
+
+                        current_severity,
+                        current_status,
+                        current_assigned_user,
+
+                        first_seen_at,
+                        last_seen_at
+
+                    )
+
+                    VALUES (
+                        'cyera',
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?
+                    )
+                `)
+                .bind(
+
+                    externalAlertId,
+
+                    alert.name || null,
+
+                    alert.severity || null,
+
+                    alert.status || null,
+
+                    alert.assignedUserEmail || null,
+
+                    observedAt,
+
+                    observedAt
+
+                )
+                .run();
+
+
+        const created =
+            await env.DB
+                .prepare(`
+                    SELECT id
+                    FROM alerts
+                    WHERE
+                        source = 'cyera'
+                        AND external_alert_id = ?
+                `)
+                .bind(externalAlertId)
+                .first();
+
+
+        return created?.id || null;
+    }
+
+
+    /*
+    ==========================================
+    EXISTING ALERT
+    ==========================================
+    */
+
+    await env.DB
+        .prepare(`
+            UPDATE alerts
+
+            SET
+
+                name = ?,
+
+                current_severity = ?,
+
+                current_status = ?,
+
+                current_assigned_user = ?,
+
+                last_seen_at = ?,
+
+                updated_at = CURRENT_TIMESTAMP
+
+            WHERE id = ?
+        `)
+        .bind(
+
+            alert.name || null,
+
+            alert.severity || null,
+
+            alert.status || null,
+
+            alert.assignedUserEmail || null,
+
+            observedAt,
+
+            existing.id
+
+        )
+        .run();
+
+
+    return existing.id;
+}
+/*
+==========================================
+RECORD ALERT HISTORY
+==========================================
+*/
+
+async function recordAlertHistory(
+    env,
+    alertId,
+    reportId,
+    observedAt,
+    alert
+) {
+
+    if (!alertId) {
+        return;
+    }
+
+
+    await env.DB
+        .prepare(`
+            INSERT OR IGNORE INTO alert_history (
+
+                alert_id,
+                report_id,
+                observed_at,
+                severity,
+                status,
+                assigned_user
+
+            )
+
+            VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+
+            alertId,
+
+            reportId,
+
+            observedAt,
+
+            alert.severity || null,
+
+            alert.status || null,
+
+            alert.assignedUserEmail || null
+
+        )
+        .run();
+}
 /*
 ==========================================
 CREATE REPORT
@@ -530,7 +748,39 @@ async function handleCreateReport(
                     alert.dataType || null
 
                 )
-                .run();
+                              .run();
+
+
+            /*
+            ==========================================
+            CANONICAL ALERT + HISTORY
+            ==========================================
+            */
+
+            const observedAt =
+                alert.timestamp ||
+                alert.updatedAt ||
+                report.generatedAt ||
+                new Date().toISOString();
+
+
+            const canonicalAlertId =
+                await upsertCyeraAlert(
+                    env,
+                    alert,
+                    reportId,
+                    observedAt
+                );
+
+
+            await recordAlertHistory(
+                env,
+                canonicalAlertId,
+                reportId,
+                observedAt,
+                alert
+            );
+
 
         } catch (error) {
 
