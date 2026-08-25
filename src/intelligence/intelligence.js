@@ -4,17 +4,18 @@ SECURITY INTELLIGENCE ENGINE
 ==========================================
 
 Phase 1:
-Basic Security Intelligence Summary
+Basic Security Intelligence
 
-Uses the existing populated report tables:
+Phase 1.1:
+Explainable observations
 
-    reports
-    cyera_alerts
-    purview_alerts
+Phase 1.2:
+Previous-report comparison
 
-No AI.
-No scoring.
-No anomaly detection yet.
+Important:
+Report-to-report differences are NOT treated
+as "new alerts" until alert identity/history
+logic is implemented.
 ==========================================
 */
 
@@ -23,11 +24,11 @@ export async function generateSecurityIntelligence(env) {
 
     /*
     ==========================================
-    FIND LATEST REPORT
+    FIND LATEST TWO REPORTS
     ==========================================
     */
 
-    const latestReport =
+    const reportsResult =
         await env.DB
             .prepare(`
                 SELECT
@@ -41,9 +42,21 @@ export async function generateSecurityIntelligence(env) {
                 ORDER BY
                     report_date DESC,
                     id DESC
-                LIMIT 1
+                LIMIT 2
             `)
-            .first();
+            .all();
+
+
+    const reports =
+        reportsResult.results || [];
+
+
+    const latestReport =
+        reports[0] || null;
+
+
+    const previousReport =
+        reports[1] || null;
 
 
     /*
@@ -88,7 +101,11 @@ export async function generateSecurityIntelligence(env) {
                     unknown: 0
                 }
 
-            }
+            },
+
+            comparison: null,
+
+            insights: []
 
         };
 
@@ -353,11 +370,10 @@ export async function generateSecurityIntelligence(env) {
     assigned_user_email = analyst assignment
 
     Purview:
-    user = person involved in the alert,
-    NOT an analyst assignment.
+    user = person involved in alert.
 
-    Therefore we only calculate this from
-    Cyera at this stage.
+    Therefore unassigned is calculated
+    from Cyera only for now.
     ==========================================
     */
 
@@ -389,257 +405,605 @@ export async function generateSecurityIntelligence(env) {
             unassignedResult?.count || 0
         );
 
-/*
-==========================================
-GENERATE BASIC INSIGHTS
-==========================================
-*/
 
-const totalAlerts =
-    cyeraTotal +
-    purviewTotal;
+    /*
+    ==========================================
+    TOTAL ALERTS
+    ==========================================
+    */
 
-
-const insights = [];
+    const totalAlerts =
+        cyeraTotal +
+        purviewTotal;
 
 
-/*
-------------------------------------------
-CRITICAL ALERTS
-------------------------------------------
-*/
+    /*
+    ==========================================
+    GENERATE BASIC INSIGHTS
+    ==========================================
+    */
 
-if (severity.critical > 0) {
-
-    insights.push({
-
-        type: "critical",
-
-        priority: "high",
-
-        metric:
-            severity.critical,
-
-        message:
-            `${severity.critical} critical ${
-                severity.critical === 1
-                    ? "alert requires"
-                    : "alerts require"
-            } attention.`
-
-    });
-
-}
+    const insights = [];
 
 
-/*
-------------------------------------------
-HIGH-SEVERITY ALERTS
-------------------------------------------
-*/
+    /*
+    ------------------------------------------
+    CRITICAL ALERTS
+    ------------------------------------------
+    */
 
-if (severity.high > 0) {
-
-    insights.push({
-
-        type: "severity",
-
-        priority: "high",
-
-        metric:
-            severity.high,
-
-        message:
-            `${severity.high} high-severity ${
-                severity.high === 1
-                    ? "alert is"
-                    : "alerts are"
-            } currently present.`
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-MEDIUM-SEVERITY CONCENTRATION
-------------------------------------------
-*/
-
-if (totalAlerts > 0) {
-
-    const mediumPercentage =
-        Math.round(
-            (
-                severity.medium /
-                totalAlerts
-            ) * 100
-        );
-
-
-    if (mediumPercentage >= 70) {
+    if (severity.critical > 0) {
 
         insights.push({
 
-            type: "severity_concentration",
+            type: "critical",
 
-            priority: "medium",
-
-            metric: mediumPercentage,
-
-            message:
-                `Medium-severity alerts account for approximately ${mediumPercentage}% of the current alert volume.`
-
-        });
-
-    }
-
-}
-
-
-/*
-------------------------------------------
-RESOLUTION RATE
-------------------------------------------
-*/
-
-if (totalAlerts > 0) {
-
-    const resolved =
-        status.resolved || 0;
-
-
-    const resolutionPercentage =
-        Math.round(
-            (
-                resolved /
-                totalAlerts
-            ) * 100
-        );
-
-
-    if (resolutionPercentage < 25) {
-
-        insights.push({
-
-            type: "resolution",
-
-            priority: "medium",
+            priority: "high",
 
             metric:
-                resolutionPercentage,
+                severity.critical,
 
             message:
-                `Only ${resolved} of ${totalAlerts} alerts are currently resolved (${resolutionPercentage}%).`
+                `${severity.critical} critical ${
+                    severity.critical === 1
+                        ? "alert requires"
+                        : "alerts require"
+                } attention.`
 
         });
 
     }
 
-}
+
+    /*
+    ------------------------------------------
+    HIGH-SEVERITY ALERTS
+    ------------------------------------------
+    */
+
+    if (severity.high > 0) {
+
+        insights.push({
+
+            type: "severity",
+
+            priority: "high",
+
+            metric:
+                severity.high,
+
+            message:
+                `${severity.high} high-severity ${
+                    severity.high === 1
+                        ? "alert is"
+                        : "alerts are"
+                } currently present.`
+
+        });
+
+    }
 
 
-/*
-------------------------------------------
-UNASSIGNED ALERTS
-------------------------------------------
-*/
+    /*
+    ------------------------------------------
+    MEDIUM-SEVERITY CONCENTRATION
+    ------------------------------------------
+    */
 
-if (unassigned > 0) {
+    if (totalAlerts > 0) {
 
-    insights.push({
-
-        type: "assignment",
-
-        priority:
-            unassigned >= 10
-                ? "high"
-                : "medium",
-
-        metric:
-            unassigned,
-
-        message:
-            `${unassigned} alerts are currently unassigned to an analyst.`
-
-    });
-
-}
+        const mediumPercentage =
+            Math.round(
+                (
+                    severity.medium /
+                    totalAlerts
+                ) * 100
+            );
 
 
-/*
-------------------------------------------
-NO CRITICAL / HIGH ALERTS
-------------------------------------------
-*/
+        if (mediumPercentage >= 70) {
 
-if (
-    severity.critical === 0 &&
-    severity.high === 0 &&
-    totalAlerts > 0
-) {
+            insights.push({
 
-    insights.push({
+                type:
+                    "severity_concentration",
 
-        type: "risk_observation",
+                priority:
+                    "medium",
 
-        priority: "low",
+                metric:
+                    mediumPercentage,
 
-        metric: 0,
+                message:
+                    `Medium-severity alerts account for approximately ${mediumPercentage}% of the current alert volume.`
 
-        message:
-            "No critical or high-severity alerts are present in the latest report."
+            });
 
-    });
+        }
 
-}
+    }
 
 
-/*
-==========================================
-RETURN SECURITY INTELLIGENCE
-==========================================
-*/
+    /*
+    ------------------------------------------
+    RESOLUTION RATE
+    ------------------------------------------
+    */
 
-return {
+    if (totalAlerts > 0) {
 
-    generatedAt:
-        new Date().toISOString(),
+        const resolved =
+            status.resolved || 0;
 
-    report: {
 
-        reportId:
-            latestReport.report_id,
+        const resolutionPercentage =
+            Math.round(
+                (
+                    resolved /
+                    totalAlerts
+                ) * 100
+            );
 
-        reportDate:
-            latestReport.report_date,
+
+        if (resolutionPercentage < 25) {
+
+            insights.push({
+
+                type:
+                    "resolution",
+
+                priority:
+                    "medium",
+
+                metric:
+                    resolutionPercentage,
+
+                message:
+                    `Only ${resolved} of ${totalAlerts} alerts are currently resolved (${resolutionPercentage}%).`
+
+            });
+
+        }
+
+    }
+
+
+    /*
+    ------------------------------------------
+    UNASSIGNED ALERTS
+    ------------------------------------------
+    */
+
+    if (unassigned > 0) {
+
+        insights.push({
+
+            type:
+                "assignment",
+
+            priority:
+                unassigned >= 10
+                    ? "high"
+                    : "medium",
+
+            metric:
+                unassigned,
+
+            message:
+                `${unassigned} alerts are currently unassigned to an analyst.`
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    PHASE 1.2
+    PREVIOUS REPORT COMPARISON
+    ==========================================
+    */
+
+    let comparison = null;
+
+
+    if (previousReport) {
+
+        const currentTotal =
+            totalAlerts;
+
+
+        const previousTotal =
+            Number(
+                previousReport.total_alerts || 0
+            );
+
+
+        const totalChange =
+            currentTotal -
+            previousTotal;
+
+
+        let percentageChange = 0;
+
+
+        if (previousTotal > 0) {
+
+            percentageChange =
+                Number(
+                    (
+                        (
+                            totalChange /
+                            previousTotal
+                        ) * 100
+                    ).toFixed(1)
+                );
+
+        }
+
+
+        /*
+        --------------------------------------
+        CYERA CHANGE
+        --------------------------------------
+        */
+
+        const currentCyera =
+            cyeraTotal;
+
+
+        const previousCyera =
+            Number(
+                previousReport.cyera_count || 0
+            );
+
+
+        const cyeraChange =
+            currentCyera -
+            previousCyera;
+
+
+        let cyeraPercentageChange = 0;
+
+
+        if (previousCyera > 0) {
+
+            cyeraPercentageChange =
+                Number(
+                    (
+                        (
+                            cyeraChange /
+                            previousCyera
+                        ) * 100
+                    ).toFixed(1)
+                );
+
+        }
+
+
+        /*
+        --------------------------------------
+        PURVIEW CHANGE
+        --------------------------------------
+        */
+
+        const currentPurview =
+            purviewTotal;
+
+
+        const previousPurview =
+            Number(
+                previousReport.purview_count || 0
+            );
+
+
+        const purviewChange =
+            currentPurview -
+            previousPurview;
+
+
+        let purviewPercentageChange = 0;
+
+
+        if (previousPurview > 0) {
+
+            purviewPercentageChange =
+                Number(
+                    (
+                        (
+                            purviewChange /
+                            previousPurview
+                        ) * 100
+                    ).toFixed(1)
+                );
+
+        }
+
+
+        /*
+        --------------------------------------
+        BUILD COMPARISON
+        --------------------------------------
+        */
+
+        comparison = {
+
+            previousReport: {
+
+                reportId:
+                    previousReport.report_id,
+
+                reportDate:
+                    previousReport.report_date,
+
+                totalAlerts:
+                    previousTotal,
+
+                cyera:
+                    previousCyera,
+
+                purview:
+                    previousPurview
+
+            },
+
+            currentReport: {
+
+                reportId:
+                    latestReport.report_id,
+
+                reportDate:
+                    latestReport.report_date,
+
+                totalAlerts:
+                    currentTotal,
+
+                cyera:
+                    currentCyera,
+
+                purview:
+                    currentPurview
+
+            },
+
+            change: {
+
+                totalAlerts:
+                    totalChange,
+
+                totalPercentage:
+                    percentageChange,
+
+                cyera:
+                    cyeraChange,
+
+                cyeraPercentage:
+                    cyeraPercentageChange,
+
+                purview:
+                    purviewChange,
+
+                purviewPercentage:
+                    purviewPercentageChange
+
+            }
+
+        };
+
+
+        /*
+        ======================================
+        COMPARISON INSIGHTS
+        ======================================
+        */
+
+
+        /*
+        --------------------------------------
+        ALERT VOLUME INCREASE
+        --------------------------------------
+        */
+
+        if (totalChange > 0) {
+
+            insights.push({
+
+                type:
+                    "volume_change",
+
+                priority:
+                    percentageChange >= 50
+                        ? "high"
+                        : "medium",
+
+                metric:
+                    percentageChange,
+
+                message:
+                    `The latest report contains ${currentTotal} alerts, an increase of ${totalChange} (${percentageChange}%) compared with the previous report.`
+
+            });
+
+        }
+
+
+        /*
+        --------------------------------------
+        ALERT VOLUME DECREASE
+        --------------------------------------
+        */
+
+        else if (totalChange < 0) {
+
+            insights.push({
+
+                type:
+                    "volume_change",
+
+                priority:
+                    "low",
+
+                metric:
+                    percentageChange,
+
+                message:
+                    `The latest report contains ${currentTotal} alerts, a decrease of ${Math.abs(totalChange)} (${Math.abs(percentageChange)}%) compared with the previous report.`
+
+            });
+
+        }
+
+
+        /*
+        --------------------------------------
+        NO VOLUME CHANGE
+        --------------------------------------
+        */
+
+        else {
+
+            insights.push({
+
+                type:
+                    "volume_change",
+
+                priority:
+                    "low",
+
+                metric:
+                    0,
+
+                message:
+                    "The total alert volume is unchanged compared with the previous report."
+
+            });
+
+        }
+
+
+        /*
+        --------------------------------------
+        CYERA SIGNIFICANT CHANGE
+        --------------------------------------
+        */
+
+        if (
+            Math.abs(
+                cyeraPercentageChange
+            ) >= 25
+        ) {
+
+            insights.push({
+
+                type:
+                    "source_change",
+
+                priority:
+                    cyeraPercentageChange > 0
+                        ? "medium"
+                        : "low",
+
+                metric:
+                    cyeraPercentageChange,
+
+                message:
+                    `Cyera alert volume ${
+                        cyeraPercentageChange > 0
+                            ? "increased"
+                            : "decreased"
+                    } by ${Math.abs(cyeraPercentageChange)}% compared with the previous report.`
+
+            });
+
+        }
+
+
+        /*
+        --------------------------------------
+        PURVIEW SIGNIFICANT CHANGE
+        --------------------------------------
+        */
+
+        if (
+            Math.abs(
+                purviewPercentageChange
+            ) >= 25
+        ) {
+
+            insights.push({
+
+                type:
+                    "source_change",
+
+                priority:
+                    purviewPercentageChange > 0
+                        ? "medium"
+                        : "low",
+
+                metric:
+                    purviewPercentageChange,
+
+                message:
+                    `Purview alert volume ${
+                        purviewPercentageChange > 0
+                            ? "increased"
+                            : "decreased"
+                    } by ${Math.abs(purviewPercentageChange)}% compared with the previous report.`
+
+            });
+
+        }
+
+    }
+
+
+    /*
+    ==========================================
+    RETURN SECURITY INTELLIGENCE
+    ==========================================
+    */
+
+    return {
 
         generatedAt:
-            latestReport.generated_at
+            new Date().toISOString(),
 
-    },
+        report: {
 
-    alerts: {
+            reportId:
+                latestReport.report_id,
 
-        total:
-            totalAlerts,
+            reportDate:
+                latestReport.report_date,
 
-        cyera:
-            cyeraTotal,
+            generatedAt:
+                latestReport.generated_at
 
-        purview:
-            purviewTotal,
+        },
 
-        unassigned,
+        alerts: {
 
-        severity,
+            total:
+                totalAlerts,
 
-        status
+            cyera:
+                cyeraTotal,
 
-    },
+            purview:
+                purviewTotal,
 
-    insights
+            unassigned,
 
-};
+            severity,
+
+            status
+
+        },
+
+        comparison,
+
+        insights
+
+    };
+
 }
