@@ -216,6 +216,358 @@ async function getCyeraLifecycle(env, reportId) {
         carriedOverPercentage
     };
 }
+/*
+==========================================
+CYERA ALERT AGING / PERSISTENCE
+==========================================
+*/
+
+async function getCyeraAlertAging(
+    env,
+    reportId
+) {
+
+    /*
+    ==========================================
+    GET ALERT PERSISTENCE
+    ==========================================
+    */
+
+    const result =
+        await env.DB
+            .prepare(`
+                SELECT
+                    ah.alert_id,
+
+                    COUNT(
+                        DISTINCT ah.report_id
+                    ) AS reports_seen,
+
+                    MIN(
+                        ah.observed_at
+                    ) AS first_seen_at,
+
+                    MAX(
+                        ah.observed_at
+                    ) AS last_seen_at,
+
+                    a.current_severity
+                        AS severity,
+
+                    a.current_status
+                        AS status,
+
+                    a.current_assigned_user
+                        AS assigned_user
+
+                FROM alert_history ah
+
+                JOIN alerts a
+                    ON a.id = ah.alert_id
+
+                WHERE
+                    a.source = 'cyera'
+
+                GROUP BY
+                    ah.alert_id
+
+                ORDER BY
+                    reports_seen DESC
+            `)
+            .all();
+
+
+    const rows =
+        result.results || [];
+
+
+    /*
+    ==========================================
+    INITIALIZE METRICS
+    ==========================================
+    */
+
+    let persistent2Plus = 0;
+
+    let persistent3Plus = 0;
+
+    let highOrCriticalPersistent = 0;
+
+    let longestPersistence =
+        0;
+
+    let longestRunningAlerts = [];
+
+
+    /*
+    ==========================================
+    PROCESS ALERTS
+    ==========================================
+    */
+
+    for (const row of rows) {
+
+        const reportsSeen =
+            Number(
+                row.reports_seen || 0
+            );
+
+
+        /*
+        --------------------------------------
+        2+ REPORTS
+        --------------------------------------
+        */
+
+        if (reportsSeen >= 2) {
+
+            persistent2Plus++;
+
+        }
+
+
+        /*
+        --------------------------------------
+        3+ REPORTS
+        --------------------------------------
+        */
+
+        if (reportsSeen >= 3) {
+
+            persistent3Plus++;
+
+        }
+
+
+        /*
+        --------------------------------------
+        HIGH / CRITICAL PERSISTENCE
+        --------------------------------------
+        */
+
+        const severity =
+            String(
+                row.severity || ""
+            ).toLowerCase();
+
+
+        if (
+            reportsSeen >= 2
+            &&
+            (
+                severity === "high"
+                ||
+                severity === "critical"
+            )
+        ) {
+
+            highOrCriticalPersistent++;
+
+        }
+
+
+        /*
+        --------------------------------------
+        LONGEST RUNNING
+        --------------------------------------
+        */
+
+        if (
+            reportsSeen >
+            longestPersistence
+        ) {
+
+            longestPersistence =
+                reportsSeen;
+
+            longestRunningAlerts = [
+                row
+            ];
+
+        }
+
+        else if (
+            reportsSeen ===
+            longestPersistence
+        ) {
+
+            longestRunningAlerts.push(
+                row
+            );
+
+        }
+
+    }
+
+
+    /*
+    ==========================================
+    CURRENT REPORT ALERTS
+    ==========================================
+    */
+
+    const currentResult =
+        await env.DB
+            .prepare(`
+                SELECT
+                    ah.alert_id,
+
+                    COUNT(
+                        DISTINCT ah.report_id
+                    ) AS reports_seen,
+
+                    MIN(
+                        ah.observed_at
+                    ) AS first_seen_at,
+
+                    MAX(
+                        ah.observed_at
+                    ) AS last_seen_at,
+
+                    a.current_severity
+                        AS severity,
+
+                    a.current_status
+                        AS status,
+
+                    a.current_assigned_user
+                        AS assigned_user,
+
+                    a.name
+
+                FROM alert_history ah
+
+                JOIN alerts a
+                    ON a.id = ah.alert_id
+
+                WHERE
+                    ah.report_id = ?
+
+                    AND a.source = 'cyera'
+
+                GROUP BY
+                    ah.alert_id
+
+                ORDER BY
+                    reports_seen DESC
+            `)
+            .bind(reportId)
+            .all();
+
+
+    const currentAlerts =
+        currentResult.results || [];
+
+
+    /*
+    ==========================================
+    CURRENT REPORT PERSISTENT ALERTS
+    ==========================================
+    */
+
+    const currentPersistentAlerts =
+        currentAlerts.filter(
+            alert =>
+                Number(
+                    alert.reports_seen || 0
+                ) >= 2
+        );
+
+
+    const currentPersistent2Plus =
+        currentPersistentAlerts.length;
+
+
+    const currentPersistent3Plus =
+        currentAlerts.filter(
+            alert =>
+                Number(
+                    alert.reports_seen || 0
+                ) >= 3
+        ).length;
+
+
+    const currentHighCriticalPersistent =
+        currentPersistentAlerts.filter(
+            alert => {
+
+                const severity =
+                    String(
+                        alert.severity || ""
+                    ).toLowerCase();
+
+                return (
+                    severity === "high"
+                    ||
+                    severity === "critical"
+                );
+
+            }
+        ).length;
+
+
+    /*
+    ==========================================
+    RETURN AGING METRICS
+    ==========================================
+    */
+
+    return {
+
+        reportId,
+
+        totalTrackedAlerts:
+            rows.length,
+
+        currentReportAlerts:
+            currentAlerts.length,
+
+        persistent2Plus:
+            currentPersistent2Plus,
+
+        persistent3Plus:
+            currentPersistent3Plus,
+
+        highOrCriticalPersistent:
+            currentHighCriticalPersistent,
+
+        longestPersistence,
+
+        longestRunningAlerts:
+            longestRunningAlerts
+                .slice(0, 10)
+                .map(alert => ({
+
+                    alertId:
+                        alert.alert_id,
+
+                    name:
+                        alert.name || null,
+
+                    reportsSeen:
+                        Number(
+                            alert.reports_seen || 0
+                        ),
+
+                    firstSeenAt:
+                        alert.first_seen_at,
+
+                    lastSeenAt:
+                        alert.last_seen_at,
+
+                    severity:
+                        alert.severity,
+
+                    status:
+                        alert.status,
+
+                    assignedUser:
+                        alert.assigned_user
+
+                }))
+
+    };
+}
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -1211,6 +1563,71 @@ export async function generateSecurityIntelligence(env) {
         });
 
     }
+
+    /*
+==========================================
+PHASE 3
+CYERA ALERT AGING / PERSISTENCE
+==========================================
+*/
+
+    const aging =
+        await getCyeraAlertAging(
+            env,
+            reportId
+        );
+
+
+    /*
+    ==========================================
+    AGING INSIGHTS
+    ==========================================
+    */
+
+    if (
+        aging.persistent3Plus > 0
+    ) {
+
+        insights.push({
+
+            type:
+                "persistent_alerts",
+
+            priority:
+                aging.persistent3Plus >= 10
+                    ? "high"
+                    : "medium",
+
+            metric:
+                aging.persistent3Plus,
+
+            message:
+                `${aging.persistent3Plus} Cyera alerts have persisted across at least 3 reports.`
+        });
+
+    }
+
+
+    if (
+        aging.highOrCriticalPersistent > 0
+    ) {
+
+        insights.push({
+
+            type:
+                "persistent_high_risk",
+
+            priority:
+                "high",
+
+            metric:
+                aging.highOrCriticalPersistent,
+
+            message:
+                `${aging.highOrCriticalPersistent} high or critical Cyera alerts have persisted across multiple reports.`
+        });
+
+    }
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -1256,6 +1673,7 @@ export async function generateSecurityIntelligence(env) {
 
         comparison,
         lifecycle,
+        aging,
         insights
 
     };
