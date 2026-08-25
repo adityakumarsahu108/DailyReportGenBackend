@@ -1,5 +1,319 @@
 /*
 ==========================================
+STABLE ALERT IDENTITY
+==========================================
+
+Cyera generates a different UUID for the
+same logical alert across daily reports.
+
+Therefore alert_id cannot be used to track
+an alert across reports.
+
+We generate a deterministic fingerprint
+from fields that describe the actual event.
+*/
+
+function normalizeValue(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    return String(value)
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+}
+
+
+function getAlertFingerprint(alert) {
+
+    const triggeringUser =
+        normalizeValue(alert.triggering_user);
+
+    const name =
+        normalizeValue(alert.name);
+
+    const policyId =
+        normalizeValue(alert.policy_id);
+
+    const sourceActivity =
+        normalizeValue(alert.source_activity);
+
+    const channel =
+        normalizeValue(alert.channel);
+
+    /*
+    We intentionally do NOT use alert_id.
+
+    These fields describe the underlying event
+    rather than Cyera's generated record UUID.
+    */
+
+    return [
+        triggeringUser,
+        name,
+        policyId,
+        sourceActivity,
+        channel
+    ].join("|");
+}
+
+
+/*
+==========================================
+ALERT FINGERPRINT
+==========================================
+*/
+
+function getAlertFingerprint(alert) {
+
+    const values = [
+        alert.name,
+        alert.triggering_user,
+        alert.policy_id,
+        alert.source_activity,
+        alert.channel
+    ];
+
+    const normalized = values.map(value =>
+        String(value || "")
+            .trim()
+            .toLowerCase()
+    );
+
+    // If there is not enough identifying information,
+    // don't attempt to match the alert.
+    if (
+        !normalized[0] &&
+        !normalized[1] &&
+        !normalized[2]
+    ) {
+        return null;
+    }
+
+    return normalized.join("|");
+}
+/*
+==========================================
+ALERT LIFECYCLE
+==========================================
+*/
+
+async function calculateAlertLifecycle(
+    env,
+    currentReportId,
+    previousReportId
+) {
+
+    if (!previousReportId) {
+
+        return {
+            currentReportId,
+            previousReportId: null,
+            currentAlerts: 0,
+            new: 0,
+            carriedOver: 0,
+            newPercentage: 0,
+            carriedOverPercentage: 0
+        };
+    }
+
+
+    /*
+    ==========================================
+    LOAD CURRENT CYERA ALERTS
+    ==========================================
+    */
+
+    const currentResult = await env.DB
+        .prepare(`
+            SELECT
+                alert_id,
+                name,
+                triggering_user,
+                policy_id,
+                source_activity,
+                channel,
+                severity,
+                status,
+                assigned_user_email,
+                timestamp,
+                updated_at
+            FROM cyera_alerts
+            WHERE report_id = ?
+        `)
+        .bind(currentReportId)
+        .all();
+
+
+    /*
+    ==========================================
+    LOAD PREVIOUS CYERA ALERTS
+    ==========================================
+    */
+
+    const previousResult = await env.DB
+        .prepare(`
+            SELECT
+                alert_id,
+                name,
+                triggering_user,
+                policy_id,
+                source_activity,
+                channel,
+                severity,
+                status,
+                assigned_user_email,
+                timestamp,
+                updated_at
+            FROM cyera_alerts
+            WHERE report_id = ?
+        `)
+        .bind(previousReportId)
+        .all();
+
+
+    const currentAlerts =
+        currentResult.results || [];
+
+    const previousAlerts =
+        previousResult.results || [];
+
+
+    /*
+    ==========================================
+    CREATE PREVIOUS ALERT FINGERPRINT SET
+    ==========================================
+    */
+
+    const previousFingerprints =
+        new Set();
+
+    for (const alert of previousAlerts) {
+
+        const fingerprint =
+            getAlertFingerprint(alert);
+
+        if (fingerprint) {
+            previousFingerprints.add(fingerprint);
+        }
+    }
+
+
+    /*
+    ==========================================
+    CLASSIFY CURRENT ALERTS
+    ==========================================
+    */
+
+    let newCount = 0;
+    let carriedOverCount = 0;
+
+    const newAlerts = [];
+    const carriedOverAlerts = [];
+
+
+    for (const alert of currentAlerts) {
+
+        const fingerprint =
+            getAlertFingerprint(alert);
+
+
+        if (
+            fingerprint &&
+            previousFingerprints.has(fingerprint)
+        ) {
+
+            carriedOverCount++;
+
+            carriedOverAlerts.push({
+                alertId: alert.alert_id,
+                fingerprint,
+                name: alert.name,
+                severity: alert.severity,
+                status: alert.status,
+                assignedUser:
+                    alert.assigned_user_email || null
+            });
+
+        } else {
+
+            newCount++;
+
+            newAlerts.push({
+                alertId: alert.alert_id,
+                fingerprint,
+                name: alert.name,
+                severity: alert.severity,
+                status: alert.status,
+                assignedUser:
+                    alert.assigned_user_email || null
+            });
+        }
+    }
+
+
+    /*
+    ==========================================
+    PERCENTAGES
+    ==========================================
+    */
+
+    const total =
+        currentAlerts.length;
+
+    const newPercentage =
+        total > 0
+            ? Number(
+                ((newCount / total) * 100).toFixed(1)
+            )
+            : 0;
+
+    const carriedOverPercentage =
+        total > 0
+            ? Number(
+                ((carriedOverCount / total) * 100).toFixed(1)
+            )
+            : 0;
+
+
+    /*
+    ==========================================
+    RETURN
+    ==========================================
+    */
+
+    return {
+
+        currentReportId,
+
+        previousReportId,
+
+        currentAlerts:
+            total,
+
+        new:
+            newCount,
+
+        carriedOver:
+            carriedOverCount,
+
+        newPercentage,
+
+        carriedOverPercentage,
+
+        /*
+        Keep the actual alerts available
+        for future intelligence features.
+        */
+
+        newAlerts,
+
+        carriedOverAlerts
+    };
+}
+/*
+==========================================
 SECURITY INTELLIGENCE ENGINE
 ==========================================
 
@@ -1508,11 +1822,11 @@ export async function generateSecurityIntelligence(env) {
     ==========================================
     */
 
-    const lifecycle =
-        await getCyeraLifecycle(
-            env,
-            reportId
-        );
+    const lifecycle = await calculateAlertLifecycle(
+    env,
+    currentReportId,
+    previousReport.report_id
+);
 
 
     /*
