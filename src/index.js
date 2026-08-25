@@ -1,4 +1,6 @@
-
+import {
+    generateSecurityIntelligence
+} from "./intelligence/intelligence.js";
 export default {
 
     async fetch(request, env) {
@@ -181,6 +183,69 @@ export default {
                     env,
                     corsHeaders
                 );
+            }
+
+            /*
+==========================================
+SECURITY INTELLIGENCE
+==========================================
+*/
+
+            if (
+                path ===
+                "/api/v1/intelligence/summary"
+                &&
+                request.method === "GET"
+            ) {
+
+                try {
+
+                    const intelligence =
+                        await generateSecurityIntelligence(
+                            env
+                        );
+
+
+                    return new Response(
+                        JSON.stringify({
+                            success: true,
+                            data: intelligence
+                        }),
+                        {
+                            status: 200,
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            }
+                        }
+                    );
+
+                }
+                catch (error) {
+
+                    console.error(
+                        "Security intelligence error:",
+                        error
+                    );
+
+
+                    return new Response(
+                        JSON.stringify({
+                            success: false,
+                            error:
+                                "Failed to generate security intelligence."
+                        }),
+                        {
+                            status: 500,
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            }
+                        }
+                    );
+
+                }
+
             }
 
             /*
