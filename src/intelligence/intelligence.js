@@ -58,7 +58,243 @@ function getAlertFingerprint(alert) {
     ].join("|");
 }
 
+/*
+==========================================
+ALERT PRIORITIZATION
+==========================================
+*/
 
+function prioritizeCyeraAlerts(alerts, lifecycle, aging) {
+
+    if (!Array.isArray(alerts)) {
+        return [];
+    }
+
+    const severityWeight = {
+        critical: 100,
+        high: 80,
+        medium: 50,
+        low: 20
+    };
+
+    return alerts
+        .map(alert => {
+
+            let score = severityWeight[
+                String(alert.severity || "medium").toLowerCase()
+            ] || 50;
+
+            const reasons = [];
+
+            /*
+            ------------------------------------------
+            SEVERITY
+            ------------------------------------------
+            */
+
+            if (alert.severity === "critical") {
+
+                score += 30;
+
+                reasons.push(
+                    "Critical severity"
+                );
+
+            }
+            else if (alert.severity === "high") {
+
+                score += 20;
+
+                reasons.push(
+                    "High severity"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            STATUS
+            ------------------------------------------
+            */
+
+            if (
+                alert.status &&
+                alert.status.toLowerCase() === "open"
+            ) {
+
+                score += 10;
+
+                reasons.push(
+                    "Alert remains open"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            ASSIGNMENT
+            ------------------------------------------
+            */
+
+            if (!alert.assignedUser) {
+
+                score += 15;
+
+                reasons.push(
+                    "Alert is unassigned"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            RISK ACCEPTED
+            ------------------------------------------
+            */
+
+            if (
+                alert.status &&
+                alert.status.toLowerCase() === "riskaccepted"
+            ) {
+
+                score -= 20;
+
+                reasons.push(
+                    "Risk already accepted"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            LIFECYCLE
+            ------------------------------------------
+            */
+
+            const isCarriedOver =
+                lifecycle?.carriedOverAlerts?.some(
+                    previous =>
+                        previous.fingerprint ===
+                        alert.fingerprint
+                );
+
+            if (isCarriedOver) {
+
+                score += 20;
+
+                reasons.push(
+                    "Carried over from previous report"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            PERSISTENCE / AGING
+            ------------------------------------------
+            */
+
+            const agingAlert =
+                aging?.longestRunningAlerts?.find(
+                    item =>
+                        item.alertId === alert.alertId
+                );
+
+            if (
+                agingAlert &&
+                agingAlert.reportsSeen >= 3
+            ) {
+
+                score += 30;
+
+                reasons.push(
+                    "Persisted across 3+ reports"
+                );
+
+            }
+            else if (
+                agingAlert &&
+                agingAlert.reportsSeen >= 2
+            ) {
+
+                score += 15;
+
+                reasons.push(
+                    "Persisted across multiple reports"
+                );
+
+            }
+
+
+            /*
+            ------------------------------------------
+            PRIORITY CLASSIFICATION
+            ------------------------------------------
+            */
+
+            let priority;
+
+            if (score >= 120) {
+
+                priority = "critical";
+
+            }
+            else if (score >= 90) {
+
+                priority = "high";
+
+            }
+            else if (score >= 60) {
+
+                priority = "medium";
+
+            }
+            else {
+
+                priority = "low";
+
+            }
+
+
+            return {
+
+                alertId:
+                    alert.alertId,
+
+                name:
+                    alert.name,
+
+                severity:
+                    alert.severity,
+
+                status:
+                    alert.status,
+
+                assignedUser:
+                    alert.assignedUser,
+
+                priorityScore:
+                    score,
+
+                priority,
+
+                reasons
+
+            };
+
+        })
+        .sort(
+            (a, b) =>
+                b.priorityScore -
+                a.priorityScore
+        );
+
+}
 
 /*
 ==========================================
@@ -634,7 +870,7 @@ async function calculateCyeraSecurityIntelligence(
             alert =>
                 String(alert.status)
                     .toLowerCase()
-                    === "riskaccepted"
+                === "riskaccepted"
         );
 
 
@@ -2250,10 +2486,10 @@ export async function generateSecurityIntelligence(env) {
     */
 
     const lifecycle = await calculateAlertLifecycle(
-    env,
-    reportId,
-    previousReport.report_id
-);
+        env,
+        reportId,
+        previousReport.report_id
+    );
 
 
     /*
@@ -2318,7 +2554,52 @@ CYERA ALERT AGING / PERSISTENCE
             reportId
         );
 
+    /*
+    ==========================================
+    PHASE 4
+    CYERA ALERT PRIORITIZATION
+    ==========================================
+    */
 
+    const prioritizedAlerts =
+        prioritizeCyeraAlerts(
+            lifecycle.newAlerts.concat(
+                lifecycle.carriedOverAlerts
+            ),
+            lifecycle,
+            aging
+        );
+
+
+    /*
+    ==========================================
+    PRIORITIZATION SUMMARY
+    ==========================================
+    */
+
+    const prioritySummary = {
+
+        critical:
+            prioritizedAlerts.filter(
+                alert => alert.priority === "critical"
+            ).length,
+
+        high:
+            prioritizedAlerts.filter(
+                alert => alert.priority === "high"
+            ).length,
+
+        medium:
+            prioritizedAlerts.filter(
+                alert => alert.priority === "medium"
+            ).length,
+
+        low:
+            prioritizedAlerts.filter(
+                alert => alert.priority === "low"
+            ).length
+
+    };
     /*
     ==========================================
     AGING INSIGHTS
@@ -2377,39 +2658,39 @@ CYERA SECURITY INTELLIGENCE
 ==========================================
 */
 
-const securityIntelligence =
-    await calculateCyeraSecurityIntelligence(
-        env,
-        reportId
-    );
+    const securityIntelligence =
+        await calculateCyeraSecurityIntelligence(
+            env,
+            reportId
+        );
 
 
-/*
-==========================================
-SECURITY INTELLIGENCE INSIGHTS
-==========================================
-*/
+    /*
+    ==========================================
+    SECURITY INTELLIGENCE INSIGHTS
+    ==========================================
+    */
 
-for (
-    const finding of securityIntelligence.findings
-) {
+    for (
+        const finding of securityIntelligence.findings
+    ) {
 
-    insights.push({
+        insights.push({
 
-        type:
-            finding.type,
+            type:
+                finding.type,
 
-        priority:
-            finding.severity,
+            priority:
+                finding.severity,
 
-        metric:
-            finding.evidence?.alertCount || 0,
+            metric:
+                finding.evidence?.alertCount || 0,
 
-        message:
-            finding.description
+            message:
+                finding.description
 
-    });
-}
+        });
+    }
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -2457,6 +2738,15 @@ for (
         lifecycle,
         aging,
         securityIntelligence,
+        prioritization: {
+
+            summary:
+                prioritySummary,
+
+            alerts:
+                prioritizedAlerts
+
+        },
         insights
 
     };
