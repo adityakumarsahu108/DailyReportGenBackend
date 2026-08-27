@@ -114,3 +114,14 @@ The API returns:
     "insights": []
   }
 }
+
+
+### How we'll use it next time
+
+Instead of pasting that massive `intelligence.js`, you can tell Claude:
+
+> **"Read `INTELLIGENCE.md` and the current `intelligence.js`. I want to add re-emerging alert detection. Keep the existing API contract and make the feature read-only."**
+
+That gives Claude the **architecture + rules + existing capabilities + roadmap** in one place.
+
+One important thing: **keep the actual `intelligence.js` alongside this MD**. The MD is the specification/blueprint; it isn't a replacement for the source code.
