@@ -5423,7 +5423,8 @@ export async function generateSecurityIntelligence(
     */
 
     const riskAcceptance =
-        calculateRiskAcceptancePatterns(
+         await calculateRiskAcceptancePatterns(
+            env,
             currentCyeraAlerts
         );
 
