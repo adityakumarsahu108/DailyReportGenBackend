@@ -196,19 +196,36 @@ function prioritizeCyeraAlerts(alerts, lifecycle, aging) {
             /*
             ------------------------------------------
             PERSISTENCE / AGING
+
+            FIXED: previously this looked up the alert
+            in aging.longestRunningAlerts by alertId.
+            That was broken in two ways:
+
+              1. alertId mismatch - aging used a numeric
+                 surrogate key from alert_history/alerts,
+                 while lifecycle alerts carry Cyera's
+                 rotating UUID. They never matched, so
+                 this bonus never fired.
+
+              2. Even with matching keys, longestRunningAlerts
+                 only contains the alert(s) tied for the
+                 single longest persistence streak in the
+                 WHOLE table - not every alert with
+                 reportsSeen >= 2 or >= 3. An alert persisting
+                 3 reports got no bonus unless it happened to
+                 tie the overall longest streak.
+
+            Fixed by looking up persistence directly by
+            fingerprint (the same identity key lifecycle
+            uses) against a full fingerprint -> reportsSeen
+            map computed in getCyeraAlertAging.
             ------------------------------------------
             */
 
-            const agingAlert =
-                aging?.longestRunningAlerts?.find(
-                    item =>
-                        item.alertId === alert.alertId
-                );
+            const reportsSeen =
+                aging?.persistenceByFingerprint?.[alert.fingerprint] || 0;
 
-            if (
-                agingAlert &&
-                agingAlert.reportsSeen >= 3
-            ) {
+            if (reportsSeen >= 3) {
 
                 score += 30;
 
@@ -217,10 +234,7 @@ function prioritizeCyeraAlerts(alerts, lifecycle, aging) {
                 );
 
             }
-            else if (
-                agingAlert &&
-                agingAlert.reportsSeen >= 2
-            ) {
+            else if (reportsSeen >= 2) {
 
                 score += 15;
 
@@ -317,7 +331,9 @@ async function calculateAlertLifecycle(
             new: 0,
             carriedOver: 0,
             newPercentage: 0,
-            carriedOverPercentage: 0
+            carriedOverPercentage: 0,
+            newAlerts: [],
+            carriedOverAlerts: []
         };
     }
 
@@ -385,21 +401,43 @@ async function calculateAlertLifecycle(
 
     /*
     ==========================================
-    CREATE PREVIOUS ALERT FINGERPRINT SET
+    BUILD PREVIOUS FINGERPRINT MULTISET
+
+    FIXED: this was a Set, which can only answer
+    "did this fingerprint exist at all yesterday?".
+
+    If the same user/policy/channel combination fires
+    twice in one day (a real, common case - e.g. one
+    person emailing the same domain twice), a Set
+    matches BOTH of today's alerts against the SAME
+    single fingerprint entry, so both get marked
+    carried-over/new based on one boolean instead of
+    being matched one-for-one against how many times
+    that fingerprint actually appeared yesterday.
+
+    A multiset (fingerprint -> remaining count) lets
+    each occurrence match at most one occurrence from
+    the previous report, which is what "carried over"
+    should mean.
     ==========================================
     */
 
-    const previousFingerprints =
-        new Set();
+    const previousFingerprintCounts =
+        new Map();
 
     for (const alert of previousAlerts) {
 
         const fingerprint =
             getAlertFingerprint(alert);
 
-        if (fingerprint) {
-            previousFingerprints.add(fingerprint);
+        if (!fingerprint) {
+            continue;
         }
+
+        previousFingerprintCounts.set(
+            fingerprint,
+            (previousFingerprintCounts.get(fingerprint) || 0) + 1
+        );
     }
 
 
@@ -421,13 +459,27 @@ async function calculateAlertLifecycle(
         const fingerprint =
             getAlertFingerprint(alert);
 
+        const remaining =
+            fingerprint
+                ? (previousFingerprintCounts.get(fingerprint) || 0)
+                : 0;
+
 
         if (
             fingerprint &&
-            previousFingerprints.has(fingerprint)
+            remaining > 0
         ) {
 
             carriedOverCount++;
+
+            // Consume one occurrence so a second
+            // alert with the same fingerprint today
+            // must match a second occurrence yesterday,
+            // not the same one twice.
+            previousFingerprintCounts.set(
+                fingerprint,
+                remaining - 1
+            );
 
             carriedOverAlerts.push({
                 alertId: alert.alert_id,
@@ -515,6 +567,7 @@ async function calculateAlertLifecycle(
         carriedOverAlerts
     };
 }
+
 /*
 ==========================================
 SECURITY INTELLIGENCE ENGINE
@@ -538,8 +591,27 @@ logic is implemented.
 
 /*
 ==========================================
-CYERA ALERT LIFECYCLE
+CYERA ALERT LIFECYCLE (LEGACY / alert_history BASED)
 NEW VS CARRIED OVER
+
+NOTE: This function is NOT called by
+generateSecurityIntelligence() below -
+calculateAlertLifecycle() (fingerprint-based)
+is used instead. This is kept only in case
+another endpoint in index.js still calls it.
+
+WARNING: this function has the same identity
+mismatch that getCyeraAlertAging() used to have -
+it joins on alert_history.alert_id, a numeric
+surrogate key, which does not correspond to
+Cyera's rotating alert_id UUID on cyera_alerts.
+If this function is actually in use anywhere,
+it should be rewritten the same way
+getCyeraAlertAging() was below (fingerprint-based,
+sourced from cyera_alerts directly) rather than
+patched in place. Flagging rather than silently
+changing it since its call sites are unknown from
+this file alone.
 ==========================================
 */
 
@@ -733,6 +805,7 @@ async function getCyeraLifecycle(env, reportId) {
         carriedOverPercentage
     };
 }
+
 /*
 ==========================================
 PHASE 4
@@ -1193,9 +1266,36 @@ async function calculateCyeraSecurityIntelligence(
 
     };
 }
+
 /*
 ==========================================
 CYERA ALERT AGING / PERSISTENCE
+
+REWRITTEN: previously this joined
+alert_history -> alerts using a numeric
+surrogate alert_id, which never lines up
+with cyera_alerts.alert_id (Cyera's rotating
+UUID). That mismatch meant
+currentPersistentAlerts always filtered to
+an empty list, so persistent2Plus /
+persistent3Plus / highOrCriticalPersistent
+were silently 0 in every report regardless
+of actual persistence.
+
+This version sources directly from
+cyera_alerts (all reports) and groups rows
+by the same fingerprint used in
+calculateAlertLifecycle(), so aging and
+lifecycle now share one identity system
+instead of two disconnected ones.
+
+Note: this scans the full cyera_alerts
+table (not just two reports). That's fine
+at current volumes; if the table grows very
+large over many months, consider narrowing
+the date range or persisting fingerprint ->
+first-seen data incrementally instead of
+recomputing from scratch each run.
 ==========================================
 */
 
@@ -1204,236 +1304,145 @@ async function getCyeraAlertAging(
     reportId
 ) {
 
-    /*
-    ==========================================
-    GET ALERT PERSISTENCE
-    ==========================================
-    */
+    const result = await env.DB
+        .prepare(`
+            SELECT
+                report_id,
+                alert_id,
+                name,
+                triggering_user,
+                policy_id,
+                source_activity,
+                channel,
+                severity,
+                status,
+                assigned_user_email,
+                timestamp
+            FROM cyera_alerts
+        `)
+        .all();
 
-    const result =
-        await env.DB
-            .prepare(`
-                SELECT
-                    ah.alert_id,
-
-                    COUNT(
-                        DISTINCT ah.report_id
-                    ) AS reports_seen,
-
-                    MIN(
-                        ah.observed_at
-                    ) AS first_seen_at,
-
-                    MAX(
-                        ah.observed_at
-                    ) AS last_seen_at,
-
-                    a.current_severity
-                        AS severity,
-
-                    a.current_status
-                        AS status,
-
-                    a.current_assigned_user
-                        AS assigned_user
-
-                FROM alert_history ah
-
-                JOIN alerts a
-                    ON a.id = ah.alert_id
-
-                WHERE
-                    a.source = 'cyera'
-
-                GROUP BY
-                    ah.alert_id
-
-                ORDER BY
-                    reports_seen DESC
-            `)
-            .all();
-
-
-    const rows =
-        result.results || [];
+    const rows = result.results || [];
 
 
     /*
     ==========================================
-    INITIALIZE METRICS
+    GROUP ROWS BY STABLE FINGERPRINT
     ==========================================
     */
 
-    let persistent2Plus = 0;
-
-    let persistent3Plus = 0;
-
-    let highOrCriticalPersistent = 0;
-
-    let longestPersistence =
-        0;
-
-    let longestRunningAlerts = [];
-
-
-    /*
-    ==========================================
-    PROCESS ALERTS
-    ==========================================
-    */
+    const groups = new Map();
 
     for (const row of rows) {
 
-        const reportsSeen =
-            Number(
-                row.reports_seen || 0
-            );
+        const fingerprint =
+            getAlertFingerprint(row);
 
-
-        /*
-        --------------------------------------
-        2+ REPORTS
-        --------------------------------------
-        */
-
-        if (reportsSeen >= 2) {
-
-            persistent2Plus++;
-
+        if (!fingerprint) {
+            continue;
         }
 
+        if (!groups.has(fingerprint)) {
 
-        /*
-        --------------------------------------
-        3+ REPORTS
-        --------------------------------------
-        */
-
-        if (reportsSeen >= 3) {
-
-            persistent3Plus++;
-
+            groups.set(fingerprint, {
+                fingerprint,
+                reportIds: new Set(),
+                rows: []
+            });
         }
 
+        const group =
+            groups.get(fingerprint);
 
-        /*
-        --------------------------------------
-        HIGH / CRITICAL PERSISTENCE
-        --------------------------------------
-        */
-
-        const severity =
-            String(
-                row.severity || ""
-            ).toLowerCase();
-
-
-        if (
-            reportsSeen >= 2
-            &&
-            (
-                severity === "high"
-                ||
-                severity === "critical"
-            )
-        ) {
-
-            highOrCriticalPersistent++;
-
-        }
-
-
-        /*
-        --------------------------------------
-        LONGEST RUNNING
-        --------------------------------------
-        */
-
-        if (
-            reportsSeen >
-            longestPersistence
-        ) {
-
-            longestPersistence =
-                reportsSeen;
-
-            longestRunningAlerts = [
-                row
-            ];
-
-        }
-
-        else if (
-            reportsSeen ===
-            longestPersistence
-        ) {
-
-            longestRunningAlerts.push(
-                row
-            );
-
-        }
-
+        group.reportIds.add(row.report_id);
+        group.rows.push(row);
     }
 
 
     /*
     ==========================================
-    CURRENT REPORT ALERTS
+    RESOLVE "LATEST" ROW PER GROUP
+
+    report_id is formatted REP-YYYYMMDD, so
+    lexical sort order matches chronological
+    order without needing to join `reports`.
     ==========================================
     */
 
-    const currentResult =
-        await env.DB
-            .prepare(`
-                SELECT
-                    ah.alert_id,
+    for (const group of groups.values()) {
 
-                    COUNT(
-                        DISTINCT ah.report_id
-                    ) AS reports_seen,
+        group.rows.sort(
+            (a, b) =>
+                String(a.report_id)
+                    .localeCompare(String(b.report_id))
+        );
 
-                    MIN(
-                        ah.observed_at
-                    ) AS first_seen_at,
+        group.latest =
+            group.rows[group.rows.length - 1];
 
-                    MAX(
-                        ah.observed_at
-                    ) AS last_seen_at,
+        group.reportsSeen =
+            group.reportIds.size;
+    }
 
-                    a.current_severity
-                        AS severity,
-
-                    a.current_status
-                        AS status,
-
-                    a.current_assigned_user
-                        AS assigned_user,
-
-                    a.name
-
-                FROM alert_history ah
-
-                JOIN alerts a
-                    ON a.id = ah.alert_id
-
-                WHERE
-                    ah.report_id = ?
-
-                    AND a.source = 'cyera'
-
-                GROUP BY
-                    ah.alert_id
-
-                ORDER BY
-                    reports_seen DESC
-            `)
-            .bind(reportId)
-            .all();
+    const allGroups =
+        Array.from(groups.values());
 
 
-    const currentAlerts =
-        currentResult.results || [];
+    /*
+    ==========================================
+    FINGERPRINT -> REPORTS-SEEN LOOKUP
+
+    Used by prioritizeCyeraAlerts() so scoring
+    can check persistence for ANY alert, not
+    only the ones tied for the single longest
+    streak (see longestRunningAlerts below).
+    ==========================================
+    */
+
+    const persistenceByFingerprint = {};
+
+    for (const group of allGroups) {
+        persistenceByFingerprint[group.fingerprint] =
+            group.reportsSeen;
+    }
+
+
+    /*
+    ==========================================
+    AGGREGATE METRICS (ACROSS ALL TRACKED ALERTS)
+    ==========================================
+    */
+
+    let persistent2PlusAll = 0;
+    let persistent3PlusAll = 0;
+
+    let longestPersistence = 0;
+    let longestRunningAlerts = [];
+
+    for (const group of allGroups) {
+
+        const reportsSeen =
+            group.reportsSeen;
+
+        if (reportsSeen >= 2) {
+            persistent2PlusAll++;
+        }
+
+        if (reportsSeen >= 3) {
+            persistent3PlusAll++;
+        }
+
+        if (reportsSeen > longestPersistence) {
+
+            longestPersistence = reportsSeen;
+            longestRunningAlerts = [group];
+
+        } else if (reportsSeen === longestPersistence) {
+
+            longestRunningAlerts.push(group);
+
+        }
+    }
 
 
     /*
@@ -1442,40 +1451,35 @@ async function getCyeraAlertAging(
     ==========================================
     */
 
-    const currentPersistentAlerts =
-        currentAlerts.filter(
-            alert =>
-                Number(
-                    alert.reports_seen || 0
-                ) >= 2
+    const currentGroups =
+        allGroups.filter(
+            group => group.reportIds.has(reportId)
         );
 
+    const currentPersistentAlerts =
+        currentGroups.filter(
+            group => group.reportsSeen >= 2
+        );
 
     const currentPersistent2Plus =
         currentPersistentAlerts.length;
 
-
     const currentPersistent3Plus =
-        currentAlerts.filter(
-            alert =>
-                Number(
-                    alert.reports_seen || 0
-                ) >= 3
+        currentGroups.filter(
+            group => group.reportsSeen >= 3
         ).length;
-
 
     const currentHighCriticalPersistent =
         currentPersistentAlerts.filter(
-            alert => {
+            group => {
 
                 const severity =
                     String(
-                        alert.severity || ""
+                        group.latest.severity || ""
                     ).toLowerCase();
 
                 return (
-                    severity === "high"
-                    ||
+                    severity === "high" ||
                     severity === "critical"
                 );
 
@@ -1494,10 +1498,10 @@ async function getCyeraAlertAging(
         reportId,
 
         totalTrackedAlerts:
-            rows.length,
+            allGroups.length,
 
         currentReportAlerts:
-            currentAlerts.length,
+            currentGroups.length,
 
         persistent2Plus:
             currentPersistent2Plus,
@@ -1510,41 +1514,46 @@ async function getCyeraAlertAging(
 
         longestPersistence,
 
+        // Full lookup for scoring - see prioritizeCyeraAlerts()
+        persistenceByFingerprint,
+
         longestRunningAlerts:
             longestRunningAlerts
                 .slice(0, 10)
-                .map(alert => ({
+                .map(group => ({
+
+                    fingerprint:
+                        group.fingerprint,
 
                     alertId:
-                        alert.alert_id,
+                        group.latest.alert_id,
 
                     name:
-                        alert.name || null,
+                        group.latest.name || null,
 
                     reportsSeen:
-                        Number(
-                            alert.reports_seen || 0
-                        ),
+                        group.reportsSeen,
 
                     firstSeenAt:
-                        alert.first_seen_at,
+                        group.rows[0].timestamp,
 
                     lastSeenAt:
-                        alert.last_seen_at,
+                        group.latest.timestamp,
 
                     severity:
-                        alert.severity,
+                        group.latest.severity,
 
                     status:
-                        alert.status,
+                        group.latest.status,
 
                     assignedUser:
-                        alert.assigned_user
+                        group.latest.assigned_user_email
 
                 }))
 
     };
 }
+
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -2488,7 +2497,7 @@ export async function generateSecurityIntelligence(env) {
     const lifecycle = await calculateAlertLifecycle(
         env,
         reportId,
-        previousReport.report_id
+        previousReport?.report_id
     );
 
 
