@@ -3019,158 +3019,504 @@ function calculateSeverityEscalation(
 
 /*
 ==========================================
-REPEATED RISK ACCEPTANCE
+RISK ACCEPTANCE PATTERNS
 ==========================================
 
-Looks at current risk-accepted activity and
-identifies concentration.
+Analyzes risk-accepted Cyera alerts and
+identifies concentration by severity,
+policy, user and other useful dimensions.
+
+IMPORTANT:
+D1 `.all()` returns rows as OBJECTS.
+
+Do NOT use:
+
+rows.map(([key, value]) => ...)
+
+unless the data has first been converted
+with Object.entries().
 ==========================================
 */
 
-function calculateRiskAcceptancePatterns(
-    alerts
+async function calculateRiskAcceptancePatterns(
+    env,
+    reportId
 ) {
 
-    const riskAccepted =
-        alerts.filter(
-            alert =>
-                normalizeValue(
-                    alert.status
-                ) === "riskaccepted"
-        );
+    /*
+    ==========================================
+    LOAD RISK-ACCEPTED ALERTS
+    ==========================================
+    */
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+                alert_id,
+                name,
+                triggering_user,
+                policy_id,
+                source_activity,
+                channel,
+                severity,
+                status,
+                assigned_user_email,
+                timestamp,
+                updated_at
+            FROM cyera_alerts
+            WHERE
+                report_id = ?
+                AND LOWER(
+                    COALESCE(status, '')
+                ) = 'riskaccepted'
+        `)
+        .bind(reportId)
+        .all();
 
 
-    const insights = [];
+    const alerts =
+        result.results || [];
 
 
-    if (
-        !riskAccepted.length
-    ) {
+    /*
+    ==========================================
+    EMPTY RESULT
+    ==========================================
+    */
+
+    if (alerts.length === 0) {
 
         return {
 
-            count: 0,
+            reportId,
 
-            percentage: 0,
+            totalRiskAccepted: 0,
 
-            users: [],
+            percentages: {
 
-            policies: [],
+                total: 0,
 
-            insights
+                bySeverity: [],
+
+                byPolicy: [],
+
+                byUser: [],
+
+                byChannel: [],
+
+                byActivity: []
+
+            },
+
+            patterns: []
 
         };
 
     }
 
 
-    const users =
-        sortCounts(
-            countBy(
-                riskAccepted,
-                "triggering_user"
+    /*
+    ==========================================
+    GENERIC COUNTER
+    ==========================================
+    */
+
+    function countBy(
+        items,
+        field
+    ) {
+
+        const counts = {};
+
+        for (const item of items) {
+
+            const value =
+                String(
+                    item?.[field] ||
+                    "unknown"
+                )
+                    .trim()
+                    .toLowerCase();
+
+            counts[value] =
+                (counts[value] || 0) + 1;
+
+        }
+
+        return Object.entries(counts)
+            .sort(
+                (a, b) =>
+                    b[1] - a[1]
             )
+            .map(
+                ([value, count]) => ({
+
+                    value,
+
+                    count,
+
+                    percentage:
+                        Number(
+                            (
+                                count /
+                                items.length *
+                                100
+                            ).toFixed(1)
+                        )
+
+                })
+            );
+
+    }
+
+
+    /*
+    ==========================================
+    DISTRIBUTIONS
+    ==========================================
+    */
+
+    const bySeverity =
+        countBy(
+            alerts,
+            "severity"
         );
 
 
-    const policies =
-        sortCounts(
-            countBy(
-                riskAccepted,
-                "policy_id"
-            )
+    const byPolicy =
+        countBy(
+            alerts,
+            "policy_id"
         );
 
 
-    const riskAcceptedPercentage =
-        percentage(
-            riskAccepted.length,
-            alerts.length
+    const byUser =
+        countBy(
+            alerts,
+            "triggering_user"
+        );
+
+
+    const byChannel =
+        countBy(
+            alerts,
+            "channel"
+        );
+
+
+    const byActivity =
+        countBy(
+            alerts,
+            "source_activity"
+        );
+
+
+    /*
+    ==========================================
+    PATTERN DETECTION
+    ==========================================
+    */
+
+    const patterns = [];
+
+
+    /*
+    ------------------------------------------
+    HIGH / CRITICAL RISK ACCEPTANCE
+    ------------------------------------------
+    */
+
+    const highRiskAccepted =
+        alerts.filter(
+            alert => {
+
+                const severity =
+                    String(
+                        alert.severity || ""
+                    ).toLowerCase();
+
+                return (
+                    severity === "high" ||
+                    severity === "critical"
+                );
+
+            }
         );
 
 
     if (
-        riskAcceptedPercentage >= 25
+        highRiskAccepted.length > 0
     ) {
 
-        insights.push({
+        const percentage =
+            Number(
+                (
+                    highRiskAccepted.length /
+                    alerts.length *
+                    100
+                ).toFixed(1)
+            );
+
+
+        patterns.push({
 
             type:
-                "risk_acceptance_concentration",
+                "high_risk_acceptance",
 
-            priority:
-                "medium",
+            severity:
+                highRiskAccepted.some(
+                    alert =>
+                        String(
+                            alert.severity || ""
+                        ).toLowerCase() ===
+                        "critical"
+                )
+                    ? "high"
+                    : "medium",
 
             metric:
-                riskAcceptedPercentage,
+                highRiskAccepted.length,
+
+            percentage,
 
             message:
-                `${riskAcceptedPercentage}% of current Cyera alerts are marked risk accepted, indicating a substantial concentration of accepted risk.`
+                `${highRiskAccepted.length} high or critical severity alerts are currently risk accepted (${percentage}% of risk-accepted activity).`,
+
+            implication:
+                "Risk acceptance is being applied to higher-severity activity and may warrant periodic validation of the business justification."
 
         });
 
     }
 
 
+    /*
+    ------------------------------------------
+    DOMINANT POLICY
+    ------------------------------------------
+    */
+
     if (
-        users[0] &&
-        users[0][1] >= 3
+        byPolicy.length > 0
     ) {
 
-        insights.push({
+        const topPolicy =
+            byPolicy[0];
 
-            type:
-                "repeated_risk_acceptance_user",
 
-            priority:
-                "medium",
+        if (
+            topPolicy.percentage >= 40
+        ) {
 
-            metric:
-                users[0][1],
+            patterns.push({
 
-            message:
-                `${users[0][0]} accounts for ${users[0][1]} risk-accepted alerts, making this user a notable concentration of accepted risk.`
+                type:
+                    "risk_acceptance_policy_concentration",
 
-        });
+                severity:
+                    "medium",
+
+                metric:
+                    topPolicy.count,
+
+                percentage:
+                    topPolicy.percentage,
+
+                policy:
+                    topPolicy.value,
+
+                message:
+                    `${topPolicy.percentage}% of risk-accepted alerts are associated with the same policy.`,
+
+                implication:
+                    "A single policy is responsible for a significant share of risk acceptance activity and may deserve closer review."
+
+            });
+
+        }
 
     }
 
+
+    /*
+    ------------------------------------------
+    DOMINANT USER
+    ------------------------------------------
+    */
+
+    if (
+        byUser.length > 0
+    ) {
+
+        const topUser =
+            byUser[0];
+
+
+        if (
+            topUser.percentage >= 40
+        ) {
+
+            patterns.push({
+
+                type:
+                    "risk_acceptance_user_concentration",
+
+                severity:
+                    "medium",
+
+                metric:
+                    topUser.count,
+
+                percentage:
+                    topUser.percentage,
+
+                user:
+                    topUser.value,
+
+                message:
+                    `${topUser.percentage}% of risk-accepted alerts involve the same triggering user.`,
+
+                implication:
+                    "Risk acceptance activity is concentrated around a single user and may indicate a recurring business workflow or repeated exception."
+
+            });
+
+        }
+
+    }
+
+
+    /*
+    ------------------------------------------
+    DOMINANT CHANNEL
+    ------------------------------------------
+    */
+
+    if (
+        byChannel.length > 0
+    ) {
+
+        const topChannel =
+            byChannel[0];
+
+
+        if (
+            topChannel.percentage >= 50
+        ) {
+
+            patterns.push({
+
+                type:
+                    "risk_acceptance_channel_concentration",
+
+                severity:
+                    "low",
+
+                metric:
+                    topChannel.count,
+
+                percentage:
+                    topChannel.percentage,
+
+                channel:
+                    topChannel.value,
+
+                message:
+                    `${topChannel.percentage}% of risk-accepted alerts originate from the ${topChannel.value} channel.`,
+
+                implication:
+                    "Risk acceptance activity is concentrated in one communication or data movement channel."
+
+            });
+
+        }
+
+    }
+
+
+    /*
+    ------------------------------------------
+    DOMINANT ACTIVITY
+    ------------------------------------------
+    */
+
+    if (
+        byActivity.length > 0
+    ) {
+
+        const topActivity =
+            byActivity[0];
+
+
+        if (
+            topActivity.percentage >= 40
+        ) {
+
+            patterns.push({
+
+                type:
+                    "risk_acceptance_activity_concentration",
+
+                severity:
+                    "medium",
+
+                metric:
+                    topActivity.count,
+
+                percentage:
+                    topActivity.percentage,
+
+                activity:
+                    topActivity.value,
+
+                message:
+                    `${topActivity.percentage}% of risk-accepted alerts involve the same source activity.`,
+
+                implication:
+                    "A recurring activity is responsible for a significant portion of accepted risk."
+
+            });
+
+        }
+
+    }
+
+
+    /*
+    ==========================================
+    RETURN
+    ==========================================
+    */
 
     return {
 
-        count:
-            riskAccepted.length,
+        reportId,
 
-        percentage:
-            riskAcceptedPercentage,
+        totalRiskAccepted:
+            alerts.length,
 
-        users:
-            users
-                .slice(0, 10)
-                .map(
-                    ([user, count]) => ({
-                        user,
-                        count
-                    })
-                ),
+        percentages: {
 
-        policies:
-            policies
-                .slice(0, 10)
-                .map(
-                    ([policy, count]) => ({
-                        policy,
-                        count
-                    })
-                ),
+            total:
+                alerts.length,
 
-        insights
+            bySeverity,
+
+            byPolicy,
+
+            byUser,
+
+            byChannel,
+
+            byActivity
+
+        },
+
+        patterns
 
     };
 
 }
-
-
 /*
 ==========================================
 EMERGING RISK DETECTION
