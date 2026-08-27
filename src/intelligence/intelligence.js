@@ -3022,19 +3022,12 @@ function calculateSeverityEscalation(
 RISK ACCEPTANCE PATTERNS
 ==========================================
 
-Analyzes risk-accepted Cyera alerts and
-identifies concentration by severity,
-policy, user and other useful dimensions.
+Analyzes risk-accepted Cyera alerts.
 
 IMPORTANT:
-D1 `.all()` returns rows as OBJECTS.
-
-Do NOT use:
-
-rows.map(([key, value]) => ...)
-
-unless the data has first been converted
-with Object.entries().
+- Uses only reportId as a D1 bind parameter.
+- Never passes arrays or objects into D1.bind().
+- D1 rows are treated as normal objects.
 ==========================================
 */
 
@@ -3049,33 +3042,38 @@ async function calculateRiskAcceptancePatterns(
     ==========================================
     */
 
-    const result = await env.DB
-        .prepare(`
-            SELECT
-                alert_id,
-                name,
-                triggering_user,
-                policy_id,
-                source_activity,
-                channel,
-                severity,
-                status,
-                assigned_user_email,
-                timestamp,
-                updated_at
-            FROM cyera_alerts
-            WHERE
-                report_id = ?
-                AND LOWER(
-                    COALESCE(status, '')
-                ) = 'riskaccepted'
-        `)
-        .bind(reportId)
-        .all();
+    const result =
+        await env.DB
+            .prepare(`
+                SELECT
+                    alert_id,
+                    name,
+                    triggering_user,
+                    policy_id,
+                    source_activity,
+                    channel,
+                    severity,
+                    status,
+                    assigned_user_email,
+                    timestamp,
+                    updated_at
+                FROM cyera_alerts
+                WHERE
+                    report_id = ?
+                    AND LOWER(
+                        COALESCE(status, '')
+                    ) = 'riskaccepted'
+            `)
+            .bind(
+                String(reportId)
+            )
+            .all();
 
 
     const alerts =
-        result.results || [];
+        Array.isArray(result?.results)
+            ? result.results
+            : [];
 
 
     /*
@@ -3117,57 +3115,78 @@ async function calculateRiskAcceptancePatterns(
 
     /*
     ==========================================
-    GENERIC COUNTER
+    COUNT HELPER
     ==========================================
     */
 
-    function countBy(
-        items,
-        field
-    ) {
+    const countBy =
+        (field) => {
 
-        const counts = {};
+            const counts = {};
 
-        for (const item of items) {
 
-            const value =
-                String(
-                    item?.[field] ||
-                    "unknown"
-                )
-                    .trim()
-                    .toLowerCase();
+            for (
+                const alert
+                of alerts
+            ) {
 
-            counts[value] =
-                (counts[value] || 0) + 1;
+                let value =
+                    alert?.[field];
 
-        }
 
-        return Object.entries(counts)
-            .sort(
-                (a, b) =>
-                    b[1] - a[1]
+                if (
+                    value === null ||
+                    value === undefined ||
+                    String(value).trim() === ""
+                ) {
+
+                    value = "unknown";
+
+                }
+
+
+                value =
+                    String(value)
+                        .trim()
+                        .toLowerCase();
+
+
+                counts[value] =
+                    (
+                        counts[value] ||
+                        0
+                    ) + 1;
+
+            }
+
+
+            return Object.entries(
+                counts
             )
-            .map(
-                ([value, count]) => ({
+                .sort(
+                    (a, b) =>
+                        b[1] - a[1]
+                )
+                .map(
+                    ([value, count]) => ({
 
-                    value,
+                        value,
 
-                    count,
+                        count,
 
-                    percentage:
-                        Number(
-                            (
-                                count /
-                                items.length *
-                                100
-                            ).toFixed(1)
-                        )
+                        percentage:
+                            Number(
+                                (
+                                    count /
+                                    alerts.length *
+                                    100
+                                ).toFixed(1)
+                            )
 
-                })
-            );
+                    })
+                );
 
-    }
+        };
 
 
     /*
@@ -3178,42 +3197,37 @@ async function calculateRiskAcceptancePatterns(
 
     const bySeverity =
         countBy(
-            alerts,
             "severity"
         );
 
 
     const byPolicy =
         countBy(
-            alerts,
             "policy_id"
         );
 
 
     const byUser =
         countBy(
-            alerts,
             "triggering_user"
         );
 
 
     const byChannel =
         countBy(
-            alerts,
             "channel"
         );
 
 
     const byActivity =
         countBy(
-            alerts,
             "source_activity"
         );
 
 
     /*
     ==========================================
-    PATTERN DETECTION
+    PATTERNS
     ==========================================
     */
 
@@ -3221,9 +3235,9 @@ async function calculateRiskAcceptancePatterns(
 
 
     /*
-    ------------------------------------------
+    ==========================================
     HIGH / CRITICAL RISK ACCEPTANCE
-    ------------------------------------------
+    ==========================================
     */
 
     const highRiskAccepted =
@@ -3232,8 +3246,12 @@ async function calculateRiskAcceptancePatterns(
 
                 const severity =
                     String(
-                        alert.severity || ""
-                    ).toLowerCase();
+                        alert?.severity ||
+                        ""
+                    )
+                        .trim()
+                        .toLowerCase();
+
 
                 return (
                     severity === "high" ||
@@ -3258,19 +3276,26 @@ async function calculateRiskAcceptancePatterns(
             );
 
 
+        const hasCritical =
+            highRiskAccepted.some(
+                alert =>
+                    String(
+                        alert?.severity ||
+                        ""
+                    )
+                        .trim()
+                        .toLowerCase()
+                    === "critical"
+            );
+
+
         patterns.push({
 
             type:
                 "high_risk_acceptance",
 
             severity:
-                highRiskAccepted.some(
-                    alert =>
-                        String(
-                            alert.severity || ""
-                        ).toLowerCase() ===
-                        "critical"
-                )
+                hasCritical
                     ? "high"
                     : "medium",
 
@@ -3291,9 +3316,9 @@ async function calculateRiskAcceptancePatterns(
 
 
     /*
-    ------------------------------------------
-    DOMINANT POLICY
-    ------------------------------------------
+    ==========================================
+    POLICY CONCENTRATION
+    ==========================================
     */
 
     if (
@@ -3339,9 +3364,9 @@ async function calculateRiskAcceptancePatterns(
 
 
     /*
-    ------------------------------------------
-    DOMINANT USER
-    ------------------------------------------
+    ==========================================
+    USER CONCENTRATION
+    ==========================================
     */
 
     if (
@@ -3387,9 +3412,9 @@ async function calculateRiskAcceptancePatterns(
 
 
     /*
-    ------------------------------------------
-    DOMINANT CHANNEL
-    ------------------------------------------
+    ==========================================
+    CHANNEL CONCENTRATION
+    ==========================================
     */
 
     if (
@@ -3425,7 +3450,7 @@ async function calculateRiskAcceptancePatterns(
                     `${topChannel.percentage}% of risk-accepted alerts originate from the ${topChannel.value} channel.`,
 
                 implication:
-                    "Risk acceptance activity is concentrated in one communication or data movement channel."
+                    "Risk acceptance activity is concentrated in one channel."
 
             });
 
@@ -3435,9 +3460,9 @@ async function calculateRiskAcceptancePatterns(
 
 
     /*
-    ------------------------------------------
-    DOMINANT ACTIVITY
-    ------------------------------------------
+    ==========================================
+    ACTIVITY CONCENTRATION
+    ==========================================
     */
 
     if (
