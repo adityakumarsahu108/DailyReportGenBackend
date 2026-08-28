@@ -1592,22 +1592,22 @@ async function calculateCaseOutcomeIntelligence(
     */
 
     const result =
-        await env.DB
-            .prepare(`
-                SELECT
-                    alert_id,
-                    name,
-                    current_severity,
-                    current_status,
-                    current_assigned_user,
-                    first_seen_at,
-                    last_seen_at,
-                    resolved_at
-                FROM alerts
-                WHERE
-                    source = 'cyera'
-            `)
-            .all();
+    await env.DB
+        .prepare(`
+            SELECT
+                id,
+                external_alert_id,
+                name,
+                current_severity,
+                current_status,
+                current_assigned_user,
+                first_seen_at,
+                last_seen_at,
+                resolved_at
+            FROM alerts
+            WHERE source = 'cyera'
+        `)
+        .all();
 
 
     const alerts =
