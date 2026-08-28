@@ -1554,6 +1554,739 @@ async function getCyeraAlertAging(
     };
 }
 
+/*
+==========================================
+CASE OUTCOME & DISPOSITION INTELLIGENCE
+==========================================
+
+Risk Accepted is treated as a valid security
+outcome/disposition, not as an unresolved case.
+
+Current supported outcomes:
+
+- open
+- active
+- investigating
+- riskAccepted
+- falsePositive
+- resolved
+- closed
+
+This first version intentionally uses only the
+current report data.
+
+Historical case-flow analysis will be added
+separately after this is validated.
+==========================================
+*/
+
+async function calculateCaseOutcomeIntelligence(
+    env,
+    reportId
+) {
+
+    /*
+    ==========================================
+    LOAD CURRENT CYERA CASES
+    ==========================================
+    */
+
+    const result =
+        await env.DB
+            .prepare(`
+                SELECT
+                    alert_id,
+                    name,
+                    current_severity,
+                    current_status,
+                    current_assigned_user,
+                    first_seen_at,
+                    last_seen_at,
+                    resolved_at
+                FROM alerts
+                WHERE
+                    source = 'cyera'
+            `)
+            .all();
+
+
+    const alerts =
+        result.results || [];
+
+
+    /*
+    ==========================================
+    STATUS NORMALIZATION
+    ==========================================
+    */
+
+    const normalizeStatus = (value) => {
+
+        return String(value || "")
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_-]+/g, "");
+    };
+
+
+    /*
+    ==========================================
+    INITIALIZE OUTCOME COUNTS
+    ==========================================
+    */
+
+    const outcomes = {
+
+        open: 0,
+
+        active: 0,
+
+        investigating: 0,
+
+        riskAccepted: 0,
+
+        falsePositive: 0,
+
+        resolved: 0,
+
+        closed: 0,
+
+        unknown: 0
+
+    };
+
+
+    /*
+    ==========================================
+    SEVERITY BREAKDOWN
+    ==========================================
+    */
+
+    const dispositionedBySeverity = {
+
+        critical: 0,
+
+        high: 0,
+
+        medium: 0,
+
+        low: 0,
+
+        unknown: 0
+
+    };
+
+
+    const activeBySeverity = {
+
+        critical: 0,
+
+        high: 0,
+
+        medium: 0,
+
+        low: 0,
+
+        unknown: 0
+
+    };
+
+
+    /*
+    ==========================================
+    PROCESS CASES
+    ==========================================
+    */
+
+    for (const alert of alerts) {
+
+        const status =
+            normalizeStatus(
+                alert.current_status
+            );
+
+
+        const severity =
+            String(
+                alert.current_severity || "unknown"
+            )
+                .trim()
+                .toLowerCase();
+
+
+        const severityKey =
+            Object.prototype.hasOwnProperty.call(
+                dispositionedBySeverity,
+                severity
+            )
+                ? severity
+                : "unknown";
+
+
+        /*
+        --------------------------------------
+        CLASSIFY OUTCOME
+        --------------------------------------
+        */
+
+        let outcomeKey = "unknown";
+
+
+        if (status === "open") {
+
+            outcomeKey = "open";
+
+        }
+
+        else if (status === "active") {
+
+            outcomeKey = "active";
+
+        }
+
+        else if (
+            status === "investigating"
+        ) {
+
+            outcomeKey = "investigating";
+
+        }
+
+        else if (
+            status === "riskaccepted"
+        ) {
+
+            outcomeKey = "riskAccepted";
+
+        }
+
+        else if (
+            status === "falsepositive"
+        ) {
+
+            outcomeKey = "falsePositive";
+
+        }
+
+        else if (
+            status === "resolved"
+        ) {
+
+            outcomeKey = "resolved";
+
+        }
+
+        else if (
+            status === "closed"
+        ) {
+
+            outcomeKey = "closed";
+
+        }
+
+
+        outcomes[outcomeKey]++;
+
+
+        /*
+        --------------------------------------
+        DISPOSITIONED CASE
+        --------------------------------------
+        */
+
+        const isDispositioned =
+            (
+                outcomeKey === "riskAccepted" ||
+                outcomeKey === "falsePositive" ||
+                outcomeKey === "resolved" ||
+                outcomeKey === "closed"
+            );
+
+
+        /*
+        --------------------------------------
+        ACTIVE CASE
+        --------------------------------------
+        */
+
+        const isActive =
+            (
+                outcomeKey === "open" ||
+                outcomeKey === "active" ||
+                outcomeKey === "investigating"
+            );
+
+
+        if (isDispositioned) {
+
+            dispositionedBySeverity[
+                severityKey
+            ]++;
+
+        }
+
+
+        if (isActive) {
+
+            activeBySeverity[
+                severityKey
+            ]++;
+
+        }
+
+    }
+
+
+    /*
+    ==========================================
+    CORE METRICS
+    ==========================================
+    */
+
+    const totalCases =
+        alerts.length;
+
+
+    const dispositionedCases =
+        outcomes.riskAccepted +
+        outcomes.falsePositive +
+        outcomes.resolved +
+        outcomes.closed;
+
+
+    const activeCases =
+        outcomes.open +
+        outcomes.active +
+        outcomes.investigating;
+
+
+    const dispositionRate =
+        totalCases > 0
+            ? Number(
+                (
+                    dispositionedCases /
+                    totalCases *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+
+    const activeRate =
+        totalCases > 0
+            ? Number(
+                (
+                    activeCases /
+                    totalCases *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+
+    const riskAcceptanceRate =
+        totalCases > 0
+            ? Number(
+                (
+                    outcomes.riskAccepted /
+                    totalCases *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+
+    /*
+    ==========================================
+    ACCEPTED VS FORMALLY CLOSED
+    ==========================================
+
+    This distinction is important for management.
+
+    Risk Accepted is a valid outcome in your
+    operating model, but it is different from
+    a formally resolved/closed case.
+    ==========================================
+    */
+
+    const formallyClosedCases =
+        outcomes.resolved +
+        outcomes.closed;
+
+
+    const formalClosureRate =
+        totalCases > 0
+            ? Number(
+                (
+                    formallyClosedCases /
+                    totalCases *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+
+    /*
+    ==========================================
+    RISK ACCEPTANCE SEVERITY
+    ==========================================
+    */
+
+    const riskAcceptedSeverity = {
+
+        critical: 0,
+
+        high: 0,
+
+        medium: 0,
+
+        low: 0,
+
+        unknown: 0
+
+    };
+
+
+    for (const alert of alerts) {
+
+        const status =
+            normalizeStatus(
+                alert.current_status
+            );
+
+
+        if (status !== "riskaccepted") {
+            continue;
+        }
+
+
+        const severity =
+            String(
+                alert.current_severity || "unknown"
+            )
+                .trim()
+                .toLowerCase();
+
+
+        const severityKey =
+            Object.prototype.hasOwnProperty.call(
+                riskAcceptedSeverity,
+                severity
+            )
+                ? severity
+                : "unknown";
+
+
+        riskAcceptedSeverity[
+            severityKey
+        ]++;
+
+    }
+
+
+    /*
+    ==========================================
+    MANAGEMENT FINDINGS
+    ==========================================
+    */
+
+    const findings = [];
+
+
+    /*
+    ------------------------------------------
+    OVERALL DISPOSITION
+    ------------------------------------------
+    */
+
+    if (totalCases > 0) {
+
+        findings.push({
+
+            type:
+                "case_disposition",
+
+            severity:
+                dispositionRate >= 50
+                    ? "low"
+                    : "medium",
+
+            title:
+                "Case disposition overview",
+
+            description:
+                `${dispositionedCases} of ${totalCases} Cyera cases (${dispositionRate}%) have reached an accepted or closed disposition.`,
+
+            evidence: {
+
+                totalCases,
+
+                dispositionedCases,
+
+                dispositionRate
+
+            },
+
+            recommendedAction:
+                "Review the distribution of active and dispositioned cases to understand overall case-handling effectiveness."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    ACTIVE CASE LOAD
+    ------------------------------------------
+    */
+
+    if (activeCases > 0) {
+
+        findings.push({
+
+            type:
+                "active_case_load",
+
+            severity:
+                activeRate >= 75
+                    ? "high"
+                    : "medium",
+
+            title:
+                "Active case workload",
+
+            description:
+                `${activeCases} of ${totalCases} Cyera cases (${activeRate}%) remain in an active, open, or investigating state.`,
+
+            evidence: {
+
+                activeCases,
+
+                activeRate,
+
+                open:
+                    outcomes.open,
+
+                active:
+                    outcomes.active,
+
+                investigating:
+                    outcomes.investigating
+
+            },
+
+            recommendedAction:
+                "Review the active case population and determine whether cases are progressing toward an appropriate disposition."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    RISK ACCEPTANCE
+    ------------------------------------------
+    */
+
+    if (outcomes.riskAccepted > 0) {
+
+        findings.push({
+
+            type:
+                "risk_acceptance",
+
+            severity:
+                "low",
+
+            title:
+                "Risk acceptance is an established case outcome",
+
+            description:
+                `${outcomes.riskAccepted} cases (${riskAcceptanceRate}%) have reached a risk-accepted disposition.`,
+
+            evidence: {
+
+                riskAccepted:
+                    outcomes.riskAccepted,
+
+                riskAcceptanceRate,
+
+                severity:
+                    riskAcceptedSeverity
+
+            },
+
+            recommendedAction:
+                "Periodically review accepted-risk cases to confirm that the underlying business justification remains valid."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    HIGH / CRITICAL RISK ACCEPTED
+    ------------------------------------------
+    */
+
+    const highCriticalRiskAccepted =
+        riskAcceptedSeverity.high +
+        riskAcceptedSeverity.critical;
+
+
+    if (highCriticalRiskAccepted > 0) {
+
+        findings.push({
+
+            type:
+                "high_risk_accepted",
+
+            severity:
+                "medium",
+
+            title:
+                "High-severity cases reached risk acceptance",
+
+            description:
+                `${highCriticalRiskAccepted} high or critical severity cases have reached a risk-accepted disposition.`,
+
+            evidence: {
+
+                high:
+                    riskAcceptedSeverity.high,
+
+                critical:
+                    riskAcceptedSeverity.critical,
+
+                total:
+                    highCriticalRiskAccepted
+
+            },
+
+            recommendedAction:
+                "Validate that high and critical severity risk acceptances have appropriate business justification and ownership."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    FORMAL CLOSURE
+    ------------------------------------------
+    */
+
+    if (
+        formallyClosedCases > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "formal_closure",
+
+            severity:
+                "low",
+
+            title:
+                "Cases formally resolved or closed",
+
+            description:
+                `${formallyClosedCases} cases have reached a formally resolved or closed state.`,
+
+            evidence: {
+
+                formallyClosedCases,
+
+                formalClosureRate
+
+            },
+
+            recommendedAction:
+                "Continue monitoring formal closure alongside accepted-risk outcomes to understand how cases are being dispositioned."
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    RETURN
+    ==========================================
+    */
+
+    return {
+
+        reportId,
+
+        totalCases,
+
+        outcomes,
+
+        disposition: {
+
+            total:
+                dispositionedCases,
+
+            rate:
+                dispositionRate
+
+        },
+
+        active: {
+
+            total:
+                activeCases,
+
+            rate:
+                activeRate
+
+        },
+
+        riskAcceptance: {
+
+            total:
+                outcomes.riskAccepted,
+
+            rate:
+                riskAcceptanceRate,
+
+            bySeverity:
+                riskAcceptedSeverity
+
+        },
+
+        formalClosure: {
+
+            total:
+                formallyClosedCases,
+
+            rate:
+                formalClosureRate
+
+        },
+
+        severity: {
+
+            dispositioned:
+                dispositionedBySeverity,
+
+            active:
+                activeBySeverity
+
+        },
+
+        findings
+
+    };
+
+}
+
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -2700,6 +3433,49 @@ CYERA SECURITY INTELLIGENCE
 
         });
     }
+
+    /*
+==========================================
+CASE OUTCOME & DISPOSITION INTELLIGENCE
+==========================================
+*/
+
+const caseOutcome =
+    await calculateCaseOutcomeIntelligence(
+        env,
+        reportId
+    );
+
+    /*
+==========================================
+CASE OUTCOME INSIGHTS
+==========================================
+*/
+
+for (
+    const finding of caseOutcome.findings
+) {
+
+    insights.push({
+
+        type:
+            finding.type,
+
+        priority:
+            finding.severity,
+
+        metric:
+            finding.evidence?.total ||
+            finding.evidence?.activeCases ||
+            finding.evidence?.riskAccepted ||
+            0,
+
+        message:
+            finding.description
+
+    });
+
+}
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -2747,6 +3523,7 @@ CYERA SECURITY INTELLIGENCE
         lifecycle,
         aging,
         securityIntelligence,
+        caseOutcome,
         prioritization: {
 
             summary:
