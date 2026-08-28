@@ -2287,6 +2287,302 @@ async function calculateCaseOutcomeIntelligence(
 
 }
 
+async function calculateRiskAcceptanceIntelligence(env) {
+  const result = await env.DB.prepare(`
+    SELECT
+      id,
+      source,
+      external_alert_id,
+      name,
+      current_severity,
+      current_status,
+      first_seen_at,
+      last_seen_at,
+      resolved_at,
+      current_assigned_user,
+      created_at,
+      updated_at
+    FROM alerts
+    WHERE LOWER(COALESCE(current_status, '')) = 'riskaccepted'
+    ORDER BY first_seen_at ASC
+  `).all();
+
+  const cases = result.results || [];
+
+  const now = Date.now();
+
+  const severity = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    unknown: 0
+  };
+
+  const userCounts = {};
+  const nameCounts = {};
+
+  let totalAgeDays = 0;
+  let oldestAgeDays = 0;
+
+  const agingBuckets = {
+    "0-7": 0,
+    "8-30": 0,
+    "31-90": 0,
+    "90+": 0
+  };
+
+  for (const item of cases) {
+    const sev = String(item.current_severity || "unknown").toLowerCase();
+
+    if (Object.prototype.hasOwnProperty.call(severity, sev)) {
+      severity[sev]++;
+    } else {
+      severity.unknown++;
+    }
+
+    const user = item.current_assigned_user || "Unassigned";
+    userCounts[user] = (userCounts[user] || 0) + 1;
+
+    const name = item.name || "Unknown alert";
+    nameCounts[name] = (nameCounts[name] || 0) + 1;
+
+    const start =
+      item.first_seen_at ||
+      item.created_at ||
+      item.updated_at;
+
+    if (start) {
+      const timestamp = new Date(start).getTime();
+
+      if (!Number.isNaN(timestamp)) {
+        const ageDays = Math.max(
+          0,
+          (now - timestamp) / (1000 * 60 * 60 * 24)
+        );
+
+        totalAgeDays += ageDays;
+        oldestAgeDays = Math.max(oldestAgeDays, ageDays);
+
+        if (ageDays <= 7) {
+          agingBuckets["0-7"]++;
+        } else if (ageDays <= 30) {
+          agingBuckets["8-30"]++;
+        } else if (ageDays <= 90) {
+          agingBuckets["31-90"]++;
+        } else {
+          agingBuckets["90+"]++;
+        }
+      }
+    }
+  }
+
+  const total = cases.length;
+
+  const averageAgeDays =
+    total > 0
+      ? Number((totalAgeDays / total).toFixed(1))
+      : 0;
+
+  const highRiskAccepted =
+    severity.high + severity.critical;
+
+  const highRiskAcceptanceRate =
+    total > 0
+      ? Number(((highRiskAccepted / total) * 100).toFixed(1))
+      : 0;
+
+  function topEntries(map, limit = 5) {
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([name, count]) => ({
+        name,
+        count,
+        rate: total > 0
+          ? Number(((count / total) * 100).toFixed(1))
+          : 0
+      }));
+  }
+
+  const topUsers = topEntries(userCounts);
+  const topAlertTypes = topEntries(nameCounts);
+
+  const longStandingAccepted =
+    agingBuckets["31-90"] + agingBuckets["90+"];
+
+  const veryOldAccepted = agingBuckets["90+"];
+
+  const findings = [];
+
+  // ---------------------------------------------------------
+  // 1. High-risk acceptance
+  // ---------------------------------------------------------
+
+  if (highRiskAccepted > 0) {
+    findings.push({
+      type: "high_risk_acceptance",
+      severity: highRiskAccepted >= 10 ? "high" : "medium",
+      title: "High-severity risks are being accepted",
+      description:
+        `${highRiskAccepted} of ${total} risk-accepted cases ` +
+        `(${highRiskAcceptanceRate}%) are high or critical severity.`,
+      evidence: {
+        totalRiskAccepted: total,
+        high: severity.high,
+        critical: severity.critical,
+        highRiskAccepted,
+        highRiskAcceptanceRate
+      },
+      recommendedAction:
+        "Review high and critical risk acceptances to confirm documented business justification, ownership, and appropriate review cadence."
+    });
+  }
+
+  // ---------------------------------------------------------
+  // 2. Aging
+  // ---------------------------------------------------------
+
+  if (longStandingAccepted > 0) {
+    const rate =
+      total > 0
+        ? Number(((longStandingAccepted / total) * 100).toFixed(1))
+        : 0;
+
+    findings.push({
+      type: "risk_acceptance_aging",
+      severity: veryOldAccepted > 0 ? "high" : "medium",
+      title: "Accepted risks are remaining active over time",
+      description:
+        `${longStandingAccepted} risk-accepted cases (${rate}%) ` +
+        `have remained accepted for more than 30 days.`,
+      evidence: {
+        totalRiskAccepted: total,
+        over30Days: longStandingAccepted,
+        over90Days: veryOldAccepted,
+        rateOver30Days: rate,
+        averageAgeDays,
+        oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
+        agingBuckets
+      },
+      recommendedAction:
+        "Review long-standing accepted risks periodically to confirm that the original business justification and risk posture remain valid."
+    });
+  }
+
+  // ---------------------------------------------------------
+  // 3. Concentration
+  // ---------------------------------------------------------
+
+  if (topAlertTypes.length > 0) {
+    const top = topAlertTypes[0];
+
+    if (top.count >= 3) {
+      findings.push({
+        type: "risk_acceptance_concentration",
+        severity: top.count >= 10 ? "high" : "medium",
+        title: "Risk acceptance is concentrated in recurring alert patterns",
+        description:
+          `${top.count} risk-accepted cases (${top.rate}%) ` +
+          `share the same alert pattern: "${top.name}".`,
+        evidence: {
+          totalRiskAccepted: total,
+          topAlertPattern: top.name,
+          topAlertPatternCount: top.count,
+          topAlertPatternRate: top.rate,
+          topAlertPatterns: topAlertTypes
+        },
+        recommendedAction:
+          "Review recurring accepted-risk patterns to determine whether they represent an understood business process, an opportunity for policy tuning, or a repeated control exception."
+      });
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 4. User concentration
+  // ---------------------------------------------------------
+
+  if (topUsers.length > 0) {
+    const top = topUsers[0];
+
+    if (
+      top.name !== "Unassigned" &&
+      top.count >= 3
+    ) {
+      findings.push({
+        type: "risk_acceptance_user_concentration",
+        severity: top.count >= 10 ? "medium" : "low",
+        title: "Risk acceptances are concentrated among specific owners",
+        description:
+          `${top.count} risk-accepted cases (${top.rate}%) ` +
+          `are assigned to ${top.name}.`,
+        evidence: {
+          totalRiskAccepted: total,
+          topOwner: top.name,
+          topOwnerCount: top.count,
+          topOwnerRate: top.rate,
+          topOwners: topUsers
+        },
+        recommendedAction:
+          "Review whether concentrated risk acceptance reflects legitimate ownership or indicates a recurring exception pattern requiring broader policy or process review."
+      });
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 5. Overall observation
+  // ---------------------------------------------------------
+
+  if (total > 0) {
+    findings.push({
+      type: "risk_acceptance_profile",
+      severity: "low",
+      title: "Risk acceptance profile",
+      description:
+        `${total} cases have reached a risk-accepted disposition. ` +
+        `Their average age is ${averageAgeDays} days, with ` +
+        `${longStandingAccepted} remaining accepted for more than 30 days.`,
+      evidence: {
+        totalRiskAccepted: total,
+        severity,
+        averageAgeDays,
+        oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
+        agingBuckets,
+        highRiskAccepted,
+        highRiskAcceptanceRate
+      },
+      recommendedAction:
+        "Use the risk acceptance profile to distinguish deliberate, governed exceptions from risks that may require renewed review."
+    });
+  }
+
+  return {
+    totalRiskAccepted: total,
+
+    severity,
+
+    highRisk: {
+      total: highRiskAccepted,
+      rate: highRiskAcceptanceRate
+    },
+
+    aging: {
+      averageDays: averageAgeDays,
+      oldestDays: Number(oldestAgeDays.toFixed(1)),
+      buckets: agingBuckets,
+      over30Days: longStandingAccepted,
+      over90Days: veryOldAccepted
+    },
+
+    concentration: {
+      topAlertPatterns: topAlertTypes,
+      topOwners: topUsers
+    },
+
+    findings
+  };
+}
+
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -3446,6 +3742,8 @@ const caseOutcome =
         reportId
     );
 
+const riskAcceptance = await calculateRiskAcceptanceIntelligence(env);
+
     /*
 ==========================================
 CASE OUTCOME INSIGHTS
@@ -3524,6 +3822,7 @@ for (
         aging,
         securityIntelligence,
         caseOutcome,
+        riskAcceptance,
         prioritization: {
 
             summary:
