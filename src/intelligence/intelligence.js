@@ -1592,8 +1592,8 @@ async function calculateCaseOutcomeIntelligence(
     */
 
     const result =
-    await env.DB
-        .prepare(`
+        await env.DB
+            .prepare(`
             SELECT
                 id,
                 external_alert_id,
@@ -1607,7 +1607,7 @@ async function calculateCaseOutcomeIntelligence(
             FROM alerts
             WHERE source = 'cyera'
         `)
-        .all();
+            .all();
 
 
     const alerts =
@@ -2288,7 +2288,7 @@ async function calculateCaseOutcomeIntelligence(
 }
 
 async function calculateRiskAcceptanceIntelligence(env) {
-  const result = await env.DB.prepare(`
+    const result = await env.DB.prepare(`
     SELECT
       id,
       source,
@@ -2307,280 +2307,1064 @@ async function calculateRiskAcceptanceIntelligence(env) {
     ORDER BY first_seen_at ASC
   `).all();
 
-  const cases = result.results || [];
+    const cases = result.results || [];
 
-  const now = Date.now();
+    const now = Date.now();
 
-  const severity = {
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    unknown: 0
-  };
+    const severity = {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+        unknown: 0
+    };
 
-  const userCounts = {};
-  const nameCounts = {};
+    const userCounts = {};
+    const nameCounts = {};
 
-  let totalAgeDays = 0;
-  let oldestAgeDays = 0;
+    let totalAgeDays = 0;
+    let oldestAgeDays = 0;
 
-  const agingBuckets = {
-    "0-7": 0,
-    "8-30": 0,
-    "31-90": 0,
-    "90+": 0
-  };
+    const agingBuckets = {
+        "0-7": 0,
+        "8-30": 0,
+        "31-90": 0,
+        "90+": 0
+    };
 
-  for (const item of cases) {
-    const sev = String(item.current_severity || "unknown").toLowerCase();
+    for (const item of cases) {
+        const sev = String(item.current_severity || "unknown").toLowerCase();
 
-    if (Object.prototype.hasOwnProperty.call(severity, sev)) {
-      severity[sev]++;
-    } else {
-      severity.unknown++;
+        if (Object.prototype.hasOwnProperty.call(severity, sev)) {
+            severity[sev]++;
+        } else {
+            severity.unknown++;
+        }
+
+        const user = item.current_assigned_user || "Unassigned";
+        userCounts[user] = (userCounts[user] || 0) + 1;
+
+        const name = item.name || "Unknown alert";
+        nameCounts[name] = (nameCounts[name] || 0) + 1;
+
+        const start =
+            item.first_seen_at ||
+            item.created_at ||
+            item.updated_at;
+
+        if (start) {
+            const timestamp = new Date(start).getTime();
+
+            if (!Number.isNaN(timestamp)) {
+                const ageDays = Math.max(
+                    0,
+                    (now - timestamp) / (1000 * 60 * 60 * 24)
+                );
+
+                totalAgeDays += ageDays;
+                oldestAgeDays = Math.max(oldestAgeDays, ageDays);
+
+                if (ageDays <= 7) {
+                    agingBuckets["0-7"]++;
+                } else if (ageDays <= 30) {
+                    agingBuckets["8-30"]++;
+                } else if (ageDays <= 90) {
+                    agingBuckets["31-90"]++;
+                } else {
+                    agingBuckets["90+"]++;
+                }
+            }
+        }
     }
 
-    const user = item.current_assigned_user || "Unassigned";
-    userCounts[user] = (userCounts[user] || 0) + 1;
+    const total = cases.length;
 
-    const name = item.name || "Unknown alert";
-    nameCounts[name] = (nameCounts[name] || 0) + 1;
+    const averageAgeDays =
+        total > 0
+            ? Number((totalAgeDays / total).toFixed(1))
+            : 0;
 
-    const start =
-      item.first_seen_at ||
-      item.created_at ||
-      item.updated_at;
+    const highRiskAccepted =
+        severity.high + severity.critical;
 
-    if (start) {
-      const timestamp = new Date(start).getTime();
+    const highRiskAcceptanceRate =
+        total > 0
+            ? Number(((highRiskAccepted / total) * 100).toFixed(1))
+            : 0;
 
-      if (!Number.isNaN(timestamp)) {
-        const ageDays = Math.max(
-          0,
-          (now - timestamp) / (1000 * 60 * 60 * 24)
+    function topEntries(map, limit = 5) {
+        return Object.entries(map)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit)
+            .map(([name, count]) => ({
+                name,
+                count,
+                rate: total > 0
+                    ? Number(((count / total) * 100).toFixed(1))
+                    : 0
+            }));
+    }
+
+    const topUsers = topEntries(userCounts);
+    const topAlertTypes = topEntries(nameCounts);
+
+    const longStandingAccepted =
+        agingBuckets["31-90"] + agingBuckets["90+"];
+
+    const veryOldAccepted = agingBuckets["90+"];
+
+    const findings = [];
+
+    // ---------------------------------------------------------
+    // 1. High-risk acceptance
+    // ---------------------------------------------------------
+
+    if (highRiskAccepted > 0) {
+        findings.push({
+            type: "high_risk_acceptance",
+            severity: highRiskAccepted >= 10 ? "high" : "medium",
+            title: "High-severity risks are being accepted",
+            description:
+                `${highRiskAccepted} of ${total} risk-accepted cases ` +
+                `(${highRiskAcceptanceRate}%) are high or critical severity.`,
+            evidence: {
+                totalRiskAccepted: total,
+                high: severity.high,
+                critical: severity.critical,
+                highRiskAccepted,
+                highRiskAcceptanceRate
+            },
+            recommendedAction:
+                "Review high and critical risk acceptances to confirm documented business justification, ownership, and appropriate review cadence."
+        });
+    }
+
+    // ---------------------------------------------------------
+    // 2. Aging
+    // ---------------------------------------------------------
+
+    if (longStandingAccepted > 0) {
+        const rate =
+            total > 0
+                ? Number(((longStandingAccepted / total) * 100).toFixed(1))
+                : 0;
+
+        findings.push({
+            type: "risk_acceptance_aging",
+            severity: veryOldAccepted > 0 ? "high" : "medium",
+            title: "Accepted risks are remaining active over time",
+            description:
+                `${longStandingAccepted} risk-accepted cases (${rate}%) ` +
+                `have remained accepted for more than 30 days.`,
+            evidence: {
+                totalRiskAccepted: total,
+                over30Days: longStandingAccepted,
+                over90Days: veryOldAccepted,
+                rateOver30Days: rate,
+                averageAgeDays,
+                oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
+                agingBuckets
+            },
+            recommendedAction:
+                "Review long-standing accepted risks periodically to confirm that the original business justification and risk posture remain valid."
+        });
+    }
+
+    // ---------------------------------------------------------
+    // 3. Concentration
+    // ---------------------------------------------------------
+
+    if (topAlertTypes.length > 0) {
+        const top = topAlertTypes[0];
+
+        if (top.count >= 3) {
+            findings.push({
+                type: "risk_acceptance_concentration",
+                severity: top.count >= 10 ? "high" : "medium",
+                title: "Risk acceptance is concentrated in recurring alert patterns",
+                description:
+                    `${top.count} risk-accepted cases (${top.rate}%) ` +
+                    `share the same alert pattern: "${top.name}".`,
+                evidence: {
+                    totalRiskAccepted: total,
+                    topAlertPattern: top.name,
+                    topAlertPatternCount: top.count,
+                    topAlertPatternRate: top.rate,
+                    topAlertPatterns: topAlertTypes
+                },
+                recommendedAction:
+                    "Review recurring accepted-risk patterns to determine whether they represent an understood business process, an opportunity for policy tuning, or a repeated control exception."
+            });
+        }
+    }
+
+    // ---------------------------------------------------------
+    // 4. User concentration
+    // ---------------------------------------------------------
+
+    if (topUsers.length > 0) {
+        const top = topUsers[0];
+
+        if (
+            top.name !== "Unassigned" &&
+            top.count >= 3
+        ) {
+            findings.push({
+                type: "risk_acceptance_user_concentration",
+                severity: top.count >= 10 ? "medium" : "low",
+                title: "Risk acceptances are concentrated among specific owners",
+                description:
+                    `${top.count} risk-accepted cases (${top.rate}%) ` +
+                    `are assigned to ${top.name}.`,
+                evidence: {
+                    totalRiskAccepted: total,
+                    topOwner: top.name,
+                    topOwnerCount: top.count,
+                    topOwnerRate: top.rate,
+                    topOwners: topUsers
+                },
+                recommendedAction:
+                    "Review whether concentrated risk acceptance reflects legitimate ownership or indicates a recurring exception pattern requiring broader policy or process review."
+            });
+        }
+    }
+
+    // ---------------------------------------------------------
+    // 5. Overall observation
+    // ---------------------------------------------------------
+
+    if (total > 0) {
+        findings.push({
+            type: "risk_acceptance_profile",
+            severity: "low",
+            title: "Risk acceptance profile",
+            description:
+                `${total} cases have reached a risk-accepted disposition. ` +
+                `Their average age is ${averageAgeDays} days, with ` +
+                `${longStandingAccepted} remaining accepted for more than 30 days.`,
+            evidence: {
+                totalRiskAccepted: total,
+                severity,
+                averageAgeDays,
+                oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
+                agingBuckets,
+                highRiskAccepted,
+                highRiskAcceptanceRate
+            },
+            recommendedAction:
+                "Use the risk acceptance profile to distinguish deliberate, governed exceptions from risks that may require renewed review."
+        });
+    }
+
+    return {
+        totalRiskAccepted: total,
+
+        severity,
+
+        highRisk: {
+            total: highRiskAccepted,
+            rate: highRiskAcceptanceRate
+        },
+
+        aging: {
+            averageDays: averageAgeDays,
+            oldestDays: Number(oldestAgeDays.toFixed(1)),
+            buckets: agingBuckets,
+            over30Days: longStandingAccepted,
+            over90Days: veryOldAccepted
+        },
+
+        concentration: {
+            topAlertPatterns: topAlertTypes,
+            topOwners: topUsers
+        },
+
+        findings
+    };
+}
+
+/*
+==========================================
+CYERA WORK & ANALYST INTELLIGENCE
+==========================================
+
+Purpose:
+
+Understand how Cyera alerts are actually
+being worked by analysts.
+
+Important:
+
+- Uses canonical `alerts` for current state
+- Uses `alert_history` for analyst activity
+- Does NOT change Purview logic
+- Risk Accepted is treated as handled
+- False Positive is treated as handled
+- Open/Active/Investigating are active work
+==========================================
+*/
+
+async function calculateCyeraWorkIntelligence(env, reportId) {
+
+    /*
+    ==========================================
+    CURRENT CYERA WORKLOAD
+    ==========================================
+    */
+
+    const currentResult =
+        await env.DB
+            .prepare(`
+                SELECT
+                    id,
+                    external_alert_id,
+                    name,
+                    current_severity,
+                    current_status,
+                    current_assigned_user,
+                    first_seen_at,
+                    last_seen_at
+                FROM alerts
+                WHERE source = 'cyera'
+            `)
+            .all();
+
+    const alerts =
+        currentResult.results || [];
+
+
+    /*
+    ==========================================
+    STATUS NORMALIZATION
+    ==========================================
+    */
+
+    const normalizeStatus = (value) => {
+
+        return String(value || "")
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_-]+/g, "");
+    };
+
+
+    /*
+    ==========================================
+    WORK STATE COUNTS
+    ==========================================
+    */
+
+    const workState = {
+
+        highRiskUnassigned: 0,
+
+        highRiskAssigned: 0,
+
+        inProgress: 0,
+
+        openAssigned: 0,
+
+        openUnassigned: 0,
+
+        handled: 0,
+
+        other: 0
+
+    };
+
+
+    const severity = {
+
+        critical: 0,
+
+        high: 0,
+
+        medium: 0,
+
+        low: 0,
+
+        unknown: 0
+
+    };
+
+
+    /*
+    ==========================================
+    PROCESS CURRENT ALERTS
+    ==========================================
+    */
+
+    for (const alert of alerts) {
+
+        const status =
+            normalizeStatus(
+                alert.current_status
+            );
+
+        const sev =
+            String(
+                alert.current_severity || "unknown"
+            )
+                .trim()
+                .toLowerCase();
+
+        const assigned =
+            Boolean(
+                alert.current_assigned_user &&
+                String(
+                    alert.current_assigned_user
+                ).trim()
+            );
+
+
+        /*
+        --------------------------------------
+        SEVERITY
+        --------------------------------------
+        */
+
+        if (
+            Object.prototype.hasOwnProperty.call(
+                severity,
+                sev
+            )
+        ) {
+
+            severity[sev]++;
+
+        } else {
+
+            severity.unknown++;
+
+        }
+
+
+        /*
+        --------------------------------------
+        HANDLED
+        --------------------------------------
+        */
+
+        if (
+            [
+                "riskaccepted",
+                "falsepositive",
+                "resolved",
+                "closed"
+            ].includes(status)
+        ) {
+
+            workState.handled++;
+
+            continue;
+        }
+
+
+        /*
+        --------------------------------------
+        IN PROGRESS
+        --------------------------------------
+        */
+
+        if (
+            [
+                "inprogress",
+                "investigating",
+                "active"
+            ].includes(status)
+        ) {
+
+            workState.inProgress++;
+
+            continue;
+        }
+
+
+        /*
+        --------------------------------------
+        OPEN
+        --------------------------------------
+        */
+
+        if (status === "open") {
+
+            const highRisk =
+                sev === "critical" ||
+                sev === "high";
+
+
+            if (highRisk && !assigned) {
+
+                workState.highRiskUnassigned++;
+
+            }
+            else if (highRisk && assigned) {
+
+                workState.highRiskAssigned++;
+
+            }
+            else if (assigned) {
+
+                workState.openAssigned++;
+
+            }
+            else {
+
+                workState.openUnassigned++;
+
+            }
+
+            continue;
+        }
+
+
+        /*
+        --------------------------------------
+        UNKNOWN / OTHER
+        --------------------------------------
+        */
+
+        workState.other++;
+
+    }
+
+
+    /*
+    ==========================================
+    ANALYST ACTIVITY
+    ==========================================
+
+    We use alert_history because the canonical
+    alerts table only tells us the current state.
+
+    History lets us identify actual transitions.
+    ==========================================
+    */
+
+    const historyResult =
+        await env.DB
+            .prepare(`
+                WITH ordered_history AS (
+
+                    SELECT
+                        h.alert_id,
+                        h.report_id,
+                        h.observed_at,
+                        h.status,
+                        h.severity,
+                        h.assigned_user,
+
+                        LAG(h.status) OVER (
+                            PARTITION BY h.alert_id
+                            ORDER BY
+                                h.observed_at,
+                                h.report_id
+                        ) AS previous_status,
+
+                        LAG(h.assigned_user) OVER (
+                            PARTITION BY h.alert_id
+                            ORDER BY
+                                h.observed_at,
+                                h.report_id
+                        ) AS previous_assigned_user
+
+                    FROM alert_history h
+
+                    JOIN alerts a
+                        ON a.id = h.alert_id
+
+                    WHERE
+                        a.source = 'cyera'
+                )
+
+                SELECT
+
+                    assigned_user AS analyst,
+
+                    COUNT(*) FILTER (
+                        WHERE
+                            LOWER(status) = 'riskaccepted'
+                            AND LOWER(
+                                COALESCE(
+                                    previous_status,
+                                    ''
+                                )
+                            ) <> 'riskaccepted'
+                    ) AS risk_accepted_actions,
+
+                    COUNT(*) FILTER (
+                        WHERE
+                            LOWER(status) = 'falsepositive'
+                            AND LOWER(
+                                COALESCE(
+                                    previous_status,
+                                    ''
+                                )
+                            ) <> 'falsepositive'
+                    ) AS false_positive_actions,
+
+                    COUNT(*) FILTER (
+                        WHERE
+                            LOWER(status) = 'inprogress'
+                            AND LOWER(
+                                COALESCE(
+                                    previous_status,
+                                    ''
+                                )
+                            ) <> 'inprogress'
+                    ) AS started_investigations,
+
+                    COUNT(*) FILTER (
+                        WHERE
+                            assigned_user IS NOT NULL
+                            AND (
+                                previous_assigned_user IS NULL
+                                OR previous_assigned_user <> assigned_user
+                            )
+                    ) AS assignment_actions,
+
+                    COUNT(*) FILTER (
+                        WHERE
+                            LOWER(status) IN (
+                                'riskaccepted',
+                                'falsepositive',
+                                'resolved',
+                                'closed'
+                            )
+                            AND LOWER(
+                                COALESCE(
+                                    previous_status,
+                                    ''
+                                )
+                            ) NOT IN (
+                                'riskaccepted',
+                                'falsepositive',
+                                'resolved',
+                                'closed'
+                            )
+                    ) AS handled_actions
+
+                FROM ordered_history
+
+                WHERE assigned_user IS NOT NULL
+
+                GROUP BY assigned_user
+
+                ORDER BY
+                    handled_actions DESC,
+                    analyst
+            `)
+            .all();
+
+
+    const analystActivity =
+        (historyResult.results || []).map(
+            row => ({
+
+                analyst:
+                    row.analyst,
+
+                riskAcceptedActions:
+                    Number(
+                        row.risk_accepted_actions || 0
+                    ),
+
+                falsePositiveActions:
+                    Number(
+                        row.false_positive_actions || 0
+                    ),
+
+                startedInvestigations:
+                    Number(
+                        row.started_investigations || 0
+                    ),
+
+                assignmentActions:
+                    Number(
+                        row.assignment_actions || 0
+                    ),
+
+                handledActions:
+                    Number(
+                        row.handled_actions || 0
+                    )
+
+            })
         );
 
-        totalAgeDays += ageDays;
-        oldestAgeDays = Math.max(oldestAgeDays, ageDays);
 
-        if (ageDays <= 7) {
-          agingBuckets["0-7"]++;
-        } else if (ageDays <= 30) {
-          agingBuckets["8-30"]++;
-        } else if (ageDays <= 90) {
-          agingBuckets["31-90"]++;
-        } else {
-          agingBuckets["90+"]++;
-        }
-      }
-    }
-  }
+    /*
+    ==========================================
+    CORE METRICS
+    ==========================================
+    */
 
-  const total = cases.length;
+    const total =
+        alerts.length;
 
-  const averageAgeDays =
-    total > 0
-      ? Number((totalAgeDays / total).toFixed(1))
-      : 0;
 
-  const highRiskAccepted =
-    severity.high + severity.critical;
+    const highRiskOpen =
+        workState.highRiskUnassigned +
+        workState.highRiskAssigned;
 
-  const highRiskAcceptanceRate =
-    total > 0
-      ? Number(((highRiskAccepted / total) * 100).toFixed(1))
-      : 0;
 
-  function topEntries(map, limit = 5) {
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([name, count]) => ({
-        name,
-        count,
-        rate: total > 0
-          ? Number(((count / total) * 100).toFixed(1))
-          : 0
-      }));
-  }
+    const activeWork =
+        workState.highRiskUnassigned +
+        workState.highRiskAssigned +
+        workState.inProgress +
+        workState.openAssigned +
+        workState.openUnassigned;
 
-  const topUsers = topEntries(userCounts);
-  const topAlertTypes = topEntries(nameCounts);
 
-  const longStandingAccepted =
-    agingBuckets["31-90"] + agingBuckets["90+"];
+    const unassigned =
+        workState.highRiskUnassigned +
+        workState.openUnassigned;
 
-  const veryOldAccepted = agingBuckets["90+"];
 
-  const findings = [];
+    const handled =
+        workState.handled;
 
-  // ---------------------------------------------------------
-  // 1. High-risk acceptance
-  // ---------------------------------------------------------
 
-  if (highRiskAccepted > 0) {
-    findings.push({
-      type: "high_risk_acceptance",
-      severity: highRiskAccepted >= 10 ? "high" : "medium",
-      title: "High-severity risks are being accepted",
-      description:
-        `${highRiskAccepted} of ${total} risk-accepted cases ` +
-        `(${highRiskAcceptanceRate}%) are high or critical severity.`,
-      evidence: {
-        totalRiskAccepted: total,
-        high: severity.high,
-        critical: severity.critical,
-        highRiskAccepted,
-        highRiskAcceptanceRate
-      },
-      recommendedAction:
-        "Review high and critical risk acceptances to confirm documented business justification, ownership, and appropriate review cadence."
-    });
-  }
+    const handledRate =
+        total > 0
+            ? Number(
+                (
+                    handled /
+                    total *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
 
-  // ---------------------------------------------------------
-  // 2. Aging
-  // ---------------------------------------------------------
 
-  if (longStandingAccepted > 0) {
-    const rate =
-      total > 0
-        ? Number(((longStandingAccepted / total) * 100).toFixed(1))
-        : 0;
+    const unassignedRate =
+        total > 0
+            ? Number(
+                (
+                    unassigned /
+                    total *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
 
-    findings.push({
-      type: "risk_acceptance_aging",
-      severity: veryOldAccepted > 0 ? "high" : "medium",
-      title: "Accepted risks are remaining active over time",
-      description:
-        `${longStandingAccepted} risk-accepted cases (${rate}%) ` +
-        `have remained accepted for more than 30 days.`,
-      evidence: {
-        totalRiskAccepted: total,
-        over30Days: longStandingAccepted,
-        over90Days: veryOldAccepted,
-        rateOver30Days: rate,
-        averageAgeDays,
-        oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
-        agingBuckets
-      },
-      recommendedAction:
-        "Review long-standing accepted risks periodically to confirm that the original business justification and risk posture remain valid."
-    });
-  }
 
-  // ---------------------------------------------------------
-  // 3. Concentration
-  // ---------------------------------------------------------
+    /*
+    ==========================================
+    HIGH-RISK UNASSIGNED
+    ==========================================
+    */
 
-  if (topAlertTypes.length > 0) {
-    const top = topAlertTypes[0];
+    const findings = [];
 
-    if (top.count >= 3) {
-      findings.push({
-        type: "risk_acceptance_concentration",
-        severity: top.count >= 10 ? "high" : "medium",
-        title: "Risk acceptance is concentrated in recurring alert patterns",
-        description:
-          `${top.count} risk-accepted cases (${top.rate}%) ` +
-          `share the same alert pattern: "${top.name}".`,
-        evidence: {
-          totalRiskAccepted: total,
-          topAlertPattern: top.name,
-          topAlertPatternCount: top.count,
-          topAlertPatternRate: top.rate,
-          topAlertPatterns: topAlertTypes
-        },
-        recommendedAction:
-          "Review recurring accepted-risk patterns to determine whether they represent an understood business process, an opportunity for policy tuning, or a repeated control exception."
-      });
-    }
-  }
-
-  // ---------------------------------------------------------
-  // 4. User concentration
-  // ---------------------------------------------------------
-
-  if (topUsers.length > 0) {
-    const top = topUsers[0];
 
     if (
-      top.name !== "Unassigned" &&
-      top.count >= 3
+        workState.highRiskUnassigned > 0
     ) {
-      findings.push({
-        type: "risk_acceptance_user_concentration",
-        severity: top.count >= 10 ? "medium" : "low",
-        title: "Risk acceptances are concentrated among specific owners",
-        description:
-          `${top.count} risk-accepted cases (${top.rate}%) ` +
-          `are assigned to ${top.name}.`,
-        evidence: {
-          totalRiskAccepted: total,
-          topOwner: top.name,
-          topOwnerCount: top.count,
-          topOwnerRate: top.rate,
-          topOwners: topUsers
-        },
-        recommendedAction:
-          "Review whether concentrated risk acceptance reflects legitimate ownership or indicates a recurring exception pattern requiring broader policy or process review."
-      });
+
+        findings.push({
+
+            type:
+                "high_risk_unassigned",
+
+            severity:
+                workState.highRiskUnassigned >= 5
+                    ? "high"
+                    : "medium",
+
+            title:
+                "High-risk Cyera alerts remain unassigned",
+
+            description:
+                `${workState.highRiskUnassigned} high or critical Cyera alerts are open without an assigned analyst.`,
+
+            evidence: {
+
+                count:
+                    workState.highRiskUnassigned,
+
+                critical:
+                    alerts.filter(alert =>
+                        normalizeStatus(
+                            alert.current_status
+                        ) === "open" &&
+                        ["critical"].includes(
+                            String(
+                                alert.current_severity || ""
+                            ).toLowerCase()
+                        ) &&
+                        !alert.current_assigned_user
+                    ).length,
+
+                high:
+                    alerts.filter(alert =>
+                        normalizeStatus(
+                            alert.current_status
+                        ) === "open" &&
+                        ["high"].includes(
+                            String(
+                                alert.current_severity || ""
+                            ).toLowerCase()
+                        ) &&
+                        !alert.current_assigned_user
+                    ).length
+
+            },
+
+            recommendedAction:
+                "Prioritize assignment of open high and critical Cyera alerts to an appropriate security analyst."
+
+        });
+
     }
-  }
 
-  // ---------------------------------------------------------
-  // 5. Overall observation
-  // ---------------------------------------------------------
 
-  if (total > 0) {
-    findings.push({
-      type: "risk_acceptance_profile",
-      severity: "low",
-      title: "Risk acceptance profile",
-      description:
-        `${total} cases have reached a risk-accepted disposition. ` +
-        `Their average age is ${averageAgeDays} days, with ` +
-        `${longStandingAccepted} remaining accepted for more than 30 days.`,
-      evidence: {
-        totalRiskAccepted: total,
+    /*
+    ==========================================
+    HIGH-RISK ASSIGNED
+    ==========================================
+    */
+
+    if (
+        workState.highRiskAssigned > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "high_risk_assigned",
+
+            severity:
+                "medium",
+
+            title:
+                "High-risk Cyera alerts are assigned",
+
+            description:
+                `${workState.highRiskAssigned} high or critical Cyera alerts are open and assigned to analysts.`,
+
+            evidence: {
+
+                count:
+                    workState.highRiskAssigned
+
+            },
+
+            recommendedAction:
+                "Review assigned high-risk alerts for timely investigation and appropriate disposition."
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    ACTIVE INVESTIGATIONS
+    ==========================================
+    */
+
+    if (
+        workState.inProgress > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "active_investigations",
+
+            severity:
+                "medium",
+
+            title:
+                "Cyera investigations are actively being worked",
+
+            description:
+                `${workState.inProgress} Cyera alerts are currently in an investigation or active-work state.`,
+
+            evidence: {
+
+                count:
+                    workState.inProgress
+
+            },
+
+            recommendedAction:
+                "Review active investigations to ensure they are progressing toward an appropriate disposition."
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    OPEN BACKLOG
+    ==========================================
+    */
+
+    if (
+        workState.openUnassigned > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "open_backlog",
+
+            severity:
+                workState.openUnassigned >= 50
+                    ? "medium"
+                    : "low",
+
+            title:
+                "Open Cyera backlog remains",
+
+            description:
+                `${workState.openUnassigned} open Cyera alerts currently have no analyst assignment.`,
+
+            evidence: {
+
+                count:
+                    workState.openUnassigned
+
+            },
+
+            recommendedAction:
+                "Review the open backlog and determine which alerts require analyst assignment or disposition."
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    HANDLED CASES
+    ==========================================
+    */
+
+    if (
+        handled > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "handled_cases",
+
+            severity:
+                "low",
+
+            title:
+                "Cyera alerts have reached a handled disposition",
+
+            description:
+                `${handled} of ${total} Cyera alerts (${handledRate}%) have reached risk acceptance, false positive, resolution, or closure.`,
+
+            evidence: {
+
+                handled,
+
+                handledRate,
+
+                total
+
+            },
+
+            recommendedAction:
+                "Continue reviewing handled cases periodically to ensure dispositions remain appropriate."
+
+        });
+
+    }
+
+
+    /*
+    ==========================================
+    ANALYST ACTIVITY SUMMARY
+    ==========================================
+    */
+
+    const totalHandledActions =
+        analystActivity.reduce(
+            (sum, analyst) =>
+                sum +
+                analyst.handledActions,
+            0
+        );
+
+
+    const totalAssignments =
+        analystActivity.reduce(
+            (sum, analyst) =>
+                sum +
+                analyst.assignmentActions,
+            0
+        );
+
+
+    const totalInvestigations =
+        analystActivity.reduce(
+            (sum, analyst) =>
+                sum +
+                analyst.startedInvestigations,
+            0
+        );
+
+
+    /*
+    ==========================================
+    RETURN
+    ==========================================
+    */
+
+    return {
+
+        reportId,
+
+        totalAlerts:
+            total,
+
+        workState,
+
         severity,
-        averageAgeDays,
-        oldestAgeDays: Number(oldestAgeDays.toFixed(1)),
-        agingBuckets,
-        highRiskAccepted,
-        highRiskAcceptanceRate
-      },
-      recommendedAction:
-        "Use the risk acceptance profile to distinguish deliberate, governed exceptions from risks that may require renewed review."
-    });
-  }
 
-  return {
-    totalRiskAccepted: total,
+        workload: {
 
-    severity,
+            active:
+                activeWork,
 
-    highRisk: {
-      total: highRiskAccepted,
-      rate: highRiskAcceptanceRate
-    },
+            handled,
 
-    aging: {
-      averageDays: averageAgeDays,
-      oldestDays: Number(oldestAgeDays.toFixed(1)),
-      buckets: agingBuckets,
-      over30Days: longStandingAccepted,
-      over90Days: veryOldAccepted
-    },
+            handledRate,
 
-    concentration: {
-      topAlertPatterns: topAlertTypes,
-      topOwners: topUsers
-    },
+            unassigned,
 
-    findings
-  };
+            unassignedRate,
+
+            highRiskOpen
+
+        },
+
+        analystActivity,
+
+        analystActivitySummary: {
+
+            analysts:
+                analystActivity.length,
+
+            totalHandledActions,
+
+            totalAssignments,
+
+            totalInvestigations
+
+        },
+
+        findings
+
+    };
 }
 
 export async function generateSecurityIntelligence(env) {
@@ -3736,13 +4520,19 @@ CASE OUTCOME & DISPOSITION INTELLIGENCE
 ==========================================
 */
 
-const caseOutcome =
-    await calculateCaseOutcomeIntelligence(
-        env,
-        reportId
-    );
+    const caseOutcome =
+        await calculateCaseOutcomeIntelligence(
+            env,
+            reportId
+        );
 
-const riskAcceptance = await calculateRiskAcceptanceIntelligence(env);
+    const riskAcceptance = await calculateRiskAcceptanceIntelligence(env);
+
+    const cyeraWorkIntelligence =
+        await calculateCyeraWorkIntelligence(
+            env,
+            reportId
+        );
 
     /*
 ==========================================
@@ -3750,30 +4540,60 @@ CASE OUTCOME INSIGHTS
 ==========================================
 */
 
-for (
-    const finding of caseOutcome.findings
-) {
+    for (
+        const finding of caseOutcome.findings
+    ) {
 
-    insights.push({
+        insights.push({
 
-        type:
-            finding.type,
+            type:
+                finding.type,
 
-        priority:
-            finding.severity,
+            priority:
+                finding.severity,
 
-        metric:
-            finding.evidence?.total ||
-            finding.evidence?.activeCases ||
-            finding.evidence?.riskAccepted ||
-            0,
+            metric:
+                finding.evidence?.total ||
+                finding.evidence?.activeCases ||
+                finding.evidence?.riskAccepted ||
+                0,
 
-        message:
-            finding.description
+            message:
+                finding.description
 
-    });
+        });
 
-}
+    }
+
+    /*
+    ==========================================
+    CYERA WORK INTELLIGENCE INSIGHTS
+    ==========================================
+    */
+
+    for (
+        const finding of cyeraWorkIntelligence.findings
+    ) {
+
+        insights.push({
+
+            type:
+                finding.type,
+
+            priority:
+                finding.severity,
+
+            metric:
+                finding.evidence?.count ||
+                finding.evidence?.handled ||
+                0,
+
+            message:
+                finding.description
+
+        });
+
+    }
     /*
     ==========================================
     RETURN SECURITY INTELLIGENCE
@@ -3823,6 +4643,7 @@ for (
         securityIntelligence,
         caseOutcome,
         riskAcceptance,
+        cyeraWorkIntelligence,
         prioritization: {
 
             summary:
