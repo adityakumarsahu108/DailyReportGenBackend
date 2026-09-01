@@ -4543,7 +4543,6 @@ function buildCyeraOperationalFindings(
 
     return findings;
 }
-
 async function getCyeraOperationalIntelligence(
     env,
     reportId
@@ -4591,7 +4590,32 @@ async function getCyeraOperationalIntelligence(
 
     return {
 
-        reportId,
+        /*
+        ==========================================
+        INTELLIGENCE SCOPE
+        ==========================================
+        */
+
+        scope:
+            "current_cyera_state",
+
+        /*
+        Most recent report contributing data
+        to the canonical Cyera state.
+
+        This is NOT the number of alerts
+        contained in this report.
+        */
+
+        asOfReport:
+            reportId,
+
+
+        /*
+        ==========================================
+        CURRENT STATE
+        ==========================================
+        */
 
         currentState: {
 
@@ -4621,6 +4645,13 @@ async function getCyeraOperationalIntelligence(
                 current.highRiskUnassigned
         },
 
+
+        /*
+        ==========================================
+        HIGH-RISK OUTCOME
+        ==========================================
+        */
+
         highRiskOutcome: {
 
             total:
@@ -4648,8 +4679,21 @@ async function getCyeraOperationalIntelligence(
                 highRisk.open,
 
             openUnassigned:
-                highRisk.openUnassigned
+                highRisk.openUnassigned,
+
+            criticalRiskAccepted:
+                highRisk.criticalRiskAccepted,
+
+            highRiskAccepted:
+                highRisk.highRiskAccepted
         },
+
+
+        /*
+        ==========================================
+        ANALYST ACTIVITY
+        ==========================================
+        */
 
         analystActivity,
 
@@ -4680,12 +4724,25 @@ async function getCyeraOperationalIntelligence(
                 )
         },
 
+
+        /*
+        ==========================================
+        IMPORTANT ALERTS
+        ==========================================
+        */
+
         importantAlerts,
+
+
+        /*
+        ==========================================
+        FINDINGS
+        ==========================================
+        */
 
         findings
     };
 }
-
 export async function generateSecurityIntelligence(env) {
 
     /*
