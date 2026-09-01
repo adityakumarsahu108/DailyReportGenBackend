@@ -3971,6 +3971,721 @@ async function buildCyeraDispositionIntelligence(env, reportId) {
 
 }
 
+async function getCyeraCurrentOperationalState(env) {
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+                COUNT(*) AS total,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'open'
+                ) AS open,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) IN (
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                ) AS in_progress,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) IN (
+                        'riskaccepted',
+                        'falsepositive',
+                        'resolved',
+                        'closed'
+                    )
+                ) AS handled,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'open'
+                    AND current_assigned_user IS NULL
+                ) AS unassigned,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) IN (
+                        'critical',
+                        'high'
+                    )
+                    AND LOWER(current_status) IN (
+                        'open',
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                ) AS high_risk_active,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) IN (
+                        'critical',
+                        'high'
+                    )
+                    AND LOWER(current_status) = 'open'
+                    AND current_assigned_user IS NULL
+                ) AS high_risk_unassigned
+
+            FROM alerts
+
+            WHERE source = 'cyera'
+        `)
+        .first();
+
+    return {
+        total: Number(result?.total || 0),
+        open: Number(result?.open || 0),
+        inProgress: Number(result?.in_progress || 0),
+        handled: Number(result?.handled || 0),
+        unassigned: Number(result?.unassigned || 0),
+        highRiskActive: Number(result?.high_risk_active || 0),
+        highRiskUnassigned: Number(result?.high_risk_unassigned || 0)
+    };
+}
+
+async function getCyeraAnalystActions(env) {
+
+    const result = await env.DB
+        .prepare(`
+            WITH ordered_history AS (
+
+                SELECT
+                    h.alert_id,
+                    h.observed_at,
+                    LOWER(h.status) AS status,
+                    h.assigned_user,
+
+                    LAG(LOWER(h.status)) OVER (
+                        PARTITION BY h.alert_id
+                        ORDER BY h.observed_at, h.report_id
+                    ) AS previous_status,
+
+                    LAG(h.assigned_user) OVER (
+                        PARTITION BY h.alert_id
+                        ORDER BY h.observed_at, h.report_id
+                    ) AS previous_assigned_user
+
+                FROM alert_history h
+
+                JOIN alerts a
+                    ON a.id = h.alert_id
+
+                WHERE a.source = 'cyera'
+            )
+
+            SELECT
+
+                assigned_user AS analyst,
+
+                COUNT(*) FILTER (
+                    WHERE status = 'riskaccepted'
+                    AND COALESCE(previous_status, '') <> 'riskaccepted'
+                ) AS risk_accepted_actions,
+
+                COUNT(*) FILTER (
+                    WHERE status = 'falsepositive'
+                    AND COALESCE(previous_status, '') <> 'falsepositive'
+                ) AS false_positive_actions,
+
+                COUNT(*) FILTER (
+                    WHERE status IN (
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                    AND COALESCE(previous_status, '') NOT IN (
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                ) AS investigation_started,
+
+                COUNT(*) FILTER (
+                    WHERE assigned_user IS NOT NULL
+                    AND (
+                        previous_assigned_user IS NULL
+                        OR previous_assigned_user <> assigned_user
+                    )
+                ) AS assignment_actions,
+
+                COUNT(*) FILTER (
+                    WHERE status IN (
+                        'riskaccepted',
+                        'falsepositive',
+                        'resolved',
+                        'closed'
+                    )
+                    AND COALESCE(previous_status, '') NOT IN (
+                        'riskaccepted',
+                        'falsepositive',
+                        'resolved',
+                        'closed'
+                    )
+                ) AS handled_actions
+
+            FROM ordered_history
+
+            WHERE assigned_user IS NOT NULL
+
+            GROUP BY assigned_user
+
+            ORDER BY handled_actions DESC, analyst
+        `)
+        .all();
+
+    return (result?.results || []).map(row => ({
+        analyst: row.analyst,
+
+        riskAcceptedActions:
+            Number(row.risk_accepted_actions || 0),
+
+        falsePositiveActions:
+            Number(row.false_positive_actions || 0),
+
+        startedInvestigations:
+            Number(row.investigation_started || 0),
+
+        assignmentActions:
+            Number(row.assignment_actions || 0),
+
+        handledActions:
+            Number(row.handled_actions || 0)
+    }));
+}
+async function getCyeraHighRiskOutcomes(env) {
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+
+                COUNT(*) AS total,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'riskaccepted'
+                ) AS risk_accepted,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'falsepositive'
+                ) AS false_positive,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) IN (
+                        'resolved',
+                        'closed'
+                    )
+                ) AS resolved_or_closed,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) IN (
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                ) AS in_progress,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'open'
+                ) AS open,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_status) = 'open'
+                    AND current_assigned_user IS NULL
+                ) AS open_unassigned,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) = 'critical'
+                ) AS critical,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) = 'high'
+                ) AS high,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) = 'critical'
+                    AND LOWER(current_status) = 'riskaccepted'
+                ) AS critical_risk_accepted,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) = 'high'
+                    AND LOWER(current_status) = 'riskaccepted'
+                ) AS high_risk_accepted,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) IN (
+                        'critical',
+                        'high'
+                    )
+                    AND LOWER(current_status) IN (
+                        'inprogress',
+                        'investigating',
+                        'active'
+                    )
+                ) AS high_risk_in_progress,
+
+                COUNT(*) FILTER (
+                    WHERE LOWER(current_severity) IN (
+                        'critical',
+                        'high'
+                    )
+                    AND LOWER(current_status) = 'open'
+                    AND current_assigned_user IS NULL
+                ) AS high_risk_open_unassigned
+
+            FROM alerts
+
+            WHERE source = 'cyera'
+
+            AND LOWER(current_severity) IN (
+                'critical',
+                'high'
+            )
+        `)
+        .first();
+
+    return {
+        total: Number(result?.total || 0),
+
+        riskAccepted:
+            Number(result?.risk_accepted || 0),
+
+        falsePositive:
+            Number(result?.false_positive || 0),
+
+        resolvedOrClosed:
+            Number(result?.resolved_or_closed || 0),
+
+        inProgress:
+            Number(result?.in_progress || 0),
+
+        open:
+            Number(result?.open || 0),
+
+        openUnassigned:
+            Number(result?.open_unassigned || 0),
+
+        critical:
+            Number(result?.critical || 0),
+
+        high:
+            Number(result?.high || 0),
+
+        criticalRiskAccepted:
+            Number(result?.critical_risk_accepted || 0),
+
+        highRiskAccepted:
+            Number(result?.high_risk_accepted || 0),
+
+        highRiskInProgress:
+            Number(result?.high_risk_in_progress || 0),
+
+        highRiskOpenUnassigned:
+            Number(result?.high_risk_open_unassigned || 0)
+    };
+}
+async function getCyeraImportantAlerts(env) {
+
+    const result = await env.DB
+        .prepare(`
+            SELECT
+
+                external_alert_id AS alert_id,
+
+                name,
+
+                LOWER(current_severity) AS severity,
+
+                LOWER(current_status) AS status,
+
+                current_assigned_user AS analyst,
+
+                first_seen_at,
+
+                last_seen_at,
+
+                resolved_at
+
+            FROM alerts
+
+            WHERE source = 'cyera'
+
+            AND LOWER(current_severity) IN (
+                'critical',
+                'high'
+            )
+
+            ORDER BY
+
+                CASE LOWER(current_severity)
+                    WHEN 'critical' THEN 1
+                    WHEN 'high' THEN 2
+                    ELSE 3
+                END,
+
+                CASE LOWER(current_status)
+                    WHEN 'open' THEN 1
+                    WHEN 'inprogress' THEN 2
+                    WHEN 'investigating' THEN 3
+                    WHEN 'active' THEN 4
+                    WHEN 'riskaccepted' THEN 5
+                    WHEN 'falsepositive' THEN 6
+                    WHEN 'resolved' THEN 7
+                    WHEN 'closed' THEN 8
+                    ELSE 9
+                END,
+
+                first_seen_at ASC
+        `)
+        .all();
+
+    return (result?.results || []).map(row => ({
+        alertId: row.alert_id,
+        name: row.name,
+        severity: row.severity,
+        status: row.status,
+        analyst: row.analyst,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        resolvedAt: row.resolved_at
+    }));
+}
+function buildCyeraOperationalFindings(
+    current,
+    highRisk
+) {
+
+    const findings = [];
+
+    /*
+    ==========================================
+    HIGH / CRITICAL UNASSIGNED
+    ==========================================
+    */
+
+    if (highRisk.highRiskOpenUnassigned > 0) {
+
+        findings.push({
+            type: "high_risk_unassigned",
+            severity: "critical",
+
+            title:
+                "High-risk alerts require analyst assignment",
+
+            description:
+                `${highRisk.highRiskOpenUnassigned} high or critical Cyera alerts are open and unassigned.`,
+
+            evidence: {
+                count: highRisk.highRiskOpenUnassigned
+            },
+
+            recommendedAction:
+                "Assign these alerts for immediate analyst review."
+        });
+    }
+
+
+    /*
+    ==========================================
+    HIGH / CRITICAL IN PROGRESS
+    ==========================================
+    */
+
+    if (highRisk.highRiskInProgress > 0) {
+
+        findings.push({
+            type: "high_risk_active",
+            severity: "medium",
+
+            title:
+                "High-risk alerts are actively being worked",
+
+            description:
+                `${highRisk.highRiskInProgress} high or critical Cyera alerts are currently in progress or under investigation.`,
+
+            evidence: {
+                active: highRisk.highRiskInProgress
+            },
+
+            recommendedAction:
+                "Continue monitoring these investigations until an appropriate disposition is recorded."
+        });
+    }
+
+
+    /*
+    ==========================================
+    HIGH / CRITICAL HANDLED
+    ==========================================
+    */
+
+    const handledHighRisk =
+        highRisk.riskAccepted +
+        highRisk.falsePositive +
+        highRisk.resolvedOrClosed;
+
+    if (handledHighRisk > 0) {
+
+        findings.push({
+            type: "high_risk_handled",
+            severity: "info",
+
+            title:
+                "High and critical alerts have been reviewed",
+
+            description:
+                `${handledHighRisk} of ${highRisk.total} high or critical Cyera alerts have reached a handled disposition.`,
+
+            evidence: {
+                total: highRisk.total,
+                riskAccepted: highRisk.riskAccepted,
+                falsePositive: highRisk.falsePositive,
+                resolvedOrClosed: highRisk.resolvedOrClosed
+            },
+
+            recommendedAction:
+                "Review recorded dispositions periodically to ensure the accepted or resolved business risk remains appropriate."
+        });
+    }
+
+
+    /*
+    ==========================================
+    CRITICAL SPECIFICALLY
+    ==========================================
+    */
+
+    if (
+        highRisk.critical > 0 &&
+        highRisk.criticalRiskAccepted === highRisk.critical
+    ) {
+
+        findings.push({
+            type: "critical_all_handled",
+            severity: "info",
+
+            title:
+                "All critical Cyera alerts have been reviewed",
+
+            description:
+                `All ${highRisk.critical} critical Cyera alerts have been risk accepted by analysts. No critical alerts remain open.`,
+
+            evidence: {
+                critical: highRisk.critical,
+                riskAccepted: highRisk.criticalRiskAccepted
+            },
+
+            recommendedAction:
+                "Periodically validate that the recorded risk acceptance decisions remain appropriate."
+        });
+    }
+
+
+    /*
+    ==========================================
+    GENERAL OPEN BACKLOG
+    ==========================================
+    */
+
+    if (current.unassigned > 0) {
+
+        findings.push({
+            type: "open_backlog",
+            severity: "medium",
+
+            title:
+                "Cyera open backlog remains",
+
+            description:
+                `${current.unassigned} open Cyera alerts currently have no analyst assignment.`,
+
+            evidence: {
+                count: current.unassigned
+            },
+
+            recommendedAction:
+                "Review the backlog and determine which alerts require assignment or disposition."
+        });
+    }
+
+
+    /*
+    ==========================================
+    NOTHING CRITICAL
+    ==========================================
+    */
+
+    if (
+        highRisk.highRiskOpenUnassigned === 0 &&
+        highRisk.highRiskInProgress === 0 &&
+        highRisk.critical > 0
+    ) {
+
+        findings.push({
+            type: "high_risk_under_control",
+            severity: "info",
+
+            title:
+                "No high-risk Cyera alerts require immediate assignment",
+
+            description:
+                "All currently identified high and critical Cyera alerts are assigned and have reached an appropriate disposition.",
+
+            evidence: {
+                highRisk: highRisk.total,
+                openUnassigned: highRisk.highRiskOpenUnassigned,
+                inProgress: highRisk.highRiskInProgress
+            },
+
+            recommendedAction:
+                "Continue periodic review of high-risk dispositions."
+        });
+    }
+
+
+    return findings;
+}
+
+async function getCyeraOperationalIntelligence(
+    env,
+    reportId
+) {
+
+    const current =
+        await getCyeraCurrentOperationalState(env);
+
+    const analystActivity =
+        await getCyeraAnalystActions(env);
+
+    const highRisk =
+        await getCyeraHighRiskOutcomes(env);
+
+    const importantAlerts =
+        await getCyeraImportantAlerts(env);
+
+    const findings =
+        buildCyeraOperationalFindings(
+            current,
+            highRisk
+        );
+
+    const handledRate =
+        current.total > 0
+            ? Number(
+                (
+                    current.handled /
+                    current.total *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+    const unassignedRate =
+        current.total > 0
+            ? Number(
+                (
+                    current.unassigned /
+                    current.total *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+    return {
+
+        reportId,
+
+        currentState: {
+
+            totalAlerts:
+                current.total,
+
+            open:
+                current.open,
+
+            inProgress:
+                current.inProgress,
+
+            handled:
+                current.handled,
+
+            unassigned:
+                current.unassigned,
+
+            handledRate,
+
+            unassignedRate,
+
+            highRiskActive:
+                current.highRiskActive,
+
+            highRiskUnassigned:
+                current.highRiskUnassigned
+        },
+
+        highRiskOutcome: {
+
+            total:
+                highRisk.total,
+
+            critical:
+                highRisk.critical,
+
+            high:
+                highRisk.high,
+
+            riskAccepted:
+                highRisk.riskAccepted,
+
+            falsePositive:
+                highRisk.falsePositive,
+
+            resolvedOrClosed:
+                highRisk.resolvedOrClosed,
+
+            inProgress:
+                highRisk.inProgress,
+
+            open:
+                highRisk.open,
+
+            openUnassigned:
+                highRisk.openUnassigned
+        },
+
+        analystActivity,
+
+        analystActivitySummary: {
+
+            analysts:
+                analystActivity.length,
+
+            totalHandledActions:
+                analystActivity.reduce(
+                    (sum, analyst) =>
+                        sum + analyst.handledActions,
+                    0
+                ),
+
+            totalAssignments:
+                analystActivity.reduce(
+                    (sum, analyst) =>
+                        sum + analyst.assignmentActions,
+                    0
+                ),
+
+            totalInvestigations:
+                analystActivity.reduce(
+                    (sum, analyst) =>
+                        sum + analyst.startedInvestigations,
+                    0
+                )
+        },
+
+        importantAlerts,
+
+        findings
+    };
+}
+
 export async function generateSecurityIntelligence(env) {
 
     /*
@@ -5143,6 +5858,11 @@ CASE OUTCOME & DISPOSITION INTELLIGENCE
         env,
         reportId
     );
+    const cyeraOperationalIntelligence =
+    await getCyeraOperationalIntelligence(
+        env,
+        reportId
+    );
 
     /*
 ==========================================
@@ -5255,6 +5975,7 @@ CASE OUTCOME INSIGHTS
         riskAcceptance,
         cyeraWorkIntelligence,
         cyeraDispositionIntelligence,
+        cyeraOperationalIntelligence,
         prioritization: {
 
             summary:
