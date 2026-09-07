@@ -1984,615 +1984,615 @@ async function calculateCaseOutcomeIntelligence(
     }
 
 
-/*
-==========================================
-MANAGEMENT FINDINGS
-==========================================
-*/
+    /*
+    ==========================================
+    MANAGEMENT FINDINGS
+    ==========================================
+    */
 
-const findings = [];
-
-
-/*
-------------------------------------------
-DERIVED MANAGEMENT SIGNALS
-------------------------------------------
-*/
-
-const riskAccepted =
-    Number(outcomes.riskAccepted || 0);
-
-const falsePositive =
-    Number(outcomes.falsePositive || 0);
-
-const formallyClosed =
-    Number(formallyClosedCases || 0);
-
-const criticalRiskAccepted =
-    Number(riskAcceptedSeverity.critical || 0);
-
-const highRiskAccepted =
-    Number(riskAcceptedSeverity.high || 0);
-
-const highCriticalRiskAccepted =
-    criticalRiskAccepted +
-    highRiskAccepted;
-
-const activeCritical =
-    Number(activeBySeverity.critical || 0);
-
-const activeHigh =
-    Number(activeBySeverity.high || 0);
-
-const activeHighRisk =
-    activeCritical +
-    activeHigh;
-
-const activeMedium =
-    Number(activeBySeverity.medium || 0);
-
-const riskAcceptanceShare =
-    dispositionedCases > 0
-        ? Number(
-            (
-                riskAccepted /
-                dispositionedCases *
-                100
-            ).toFixed(1)
-        )
-        : 0;
-
-const formalClosureShare =
-    dispositionedCases > 0
-        ? Number(
-            (
-                formallyClosed /
-                dispositionedCases *
-                100
-            ).toFixed(1)
-        )
-        : 0;
+    const findings = [];
 
 
-/*
-------------------------------------------
-1. OVERALL CASE POSITION
-------------------------------------------
-*/
+    /*
+    ------------------------------------------
+    DERIVED MANAGEMENT SIGNALS
+    ------------------------------------------
+    */
 
-if (totalCases > 0) {
+    const riskAccepted =
+        Number(outcomes.riskAccepted || 0);
 
-    let position;
+    const falsePositive =
+        Number(outcomes.falsePositive || 0);
 
-    if (activeRate >= 75) {
+    const formallyClosed =
+        Number(formallyClosedCases || 0);
 
-        position =
-            "The case population is primarily active";
+    const criticalRiskAccepted =
+        Number(riskAcceptedSeverity.critical || 0);
 
-    }
-    else if (dispositionRate >= 75) {
+    const highRiskAccepted =
+        Number(riskAcceptedSeverity.high || 0);
 
-        position =
-            "The majority of cases have reached a disposition";
+    const highCriticalRiskAccepted =
+        criticalRiskAccepted +
+        highRiskAccepted;
 
-    }
-    else {
+    const activeCritical =
+        Number(activeBySeverity.critical || 0);
 
-        position =
-            "Case handling is split between active and dispositioned work";
+    const activeHigh =
+        Number(activeBySeverity.high || 0);
 
-    }
+    const activeHighRisk =
+        activeCritical +
+        activeHigh;
 
+    const activeMedium =
+        Number(activeBySeverity.medium || 0);
 
-    let detail;
-
-    if (
-        activeCases > 0 &&
+    const riskAcceptanceShare =
         dispositionedCases > 0
-    ) {
-
-        detail =
-            `${activeCases} cases (${activeRate}%) remain active while ` +
-            `${dispositionedCases} (${dispositionRate}%) have reached a disposition.`;
-
-    }
-    else if (activeCases > 0) {
-
-        detail =
-            `All ${activeCases} cases remain active with no recorded disposition.`;
-
-    }
-    else {
-
-        detail =
-            `All ${dispositionedCases} cases have reached a recorded disposition.`;
-
-    }
-
-
-    findings.push({
-
-        type:
-            "case_disposition",
-
-        severity:
-            activeRate >= 75
-                ? "medium"
-                : dispositionRate >= 75
-                    ? "low"
-                    : "medium",
-
-        title:
-            position,
-
-        description:
-            `${detail} ` +
-            (
-                riskAccepted > 0
-                    ? `${riskAccepted} are risk accepted, representing ` +
-                      `${riskAcceptanceShare}% of all dispositioned cases.`
-                    : "No cases currently carry a risk-accepted disposition."
-            ),
-
-        evidence: {
-
-            totalCases,
-
-            activeCases,
-
-            activeRate,
-
-            dispositionedCases,
-
-            dispositionRate,
-
-            riskAccepted,
-
-            riskAcceptanceShare
-
-        },
-
-        recommendedAction:
-            activeCases > dispositionedCases
-                ? "Prioritize the active population and determine which cases require assignment, investigation, risk acceptance, or formal closure."
-                : "Continue monitoring disposition quality and ensure accepted-risk and formally closed cases remain appropriately documented."
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-2. ACTIVE BACKLOG
-------------------------------------------
-*/
-
-if (activeCases > 0) {
-
-    let backlogDescription =
-        `${activeCases} of ${totalCases} cases (${activeRate}%) remain ` +
-        `in an open, active, or investigating state.`;
-
-    if (outcomes.open > 0) {
-
-        backlogDescription +=
-            ` ${outcomes.open} are still open`;
-
-        if (outcomes.active > 0 || outcomes.investigating > 0) {
-
-            backlogDescription +=
-                `, with ${outcomes.active + outcomes.investigating} already in active investigation`;
-
-        }
-
-        backlogDescription += ".";
-
-    }
-
-
-    if (
-        activeHighRisk > 0
-    ) {
-
-        backlogDescription +=
-            ` ${activeHighRisk} of the active cases are high or critical severity, ` +
-            `which represents the portion of the backlog requiring the closest attention.`;
-
-    }
-
-
-    findings.push({
-
-        type:
-            "active_case_load",
-
-        severity:
-            activeHighRisk > 0
-                ? "high"
-                : activeRate >= 75
-                    ? "high"
-                    : "medium",
-
-        title:
-            activeHighRisk > 0
-                ? "Active backlog includes high-risk cases"
-                : "Active case backlog remains",
-
-        description:
-            backlogDescription,
-
-        evidence: {
-
-            activeCases,
-
-            activeRate,
-
-            open:
-                outcomes.open,
-
-            active:
-                outcomes.active,
-
-            investigating:
-                outcomes.investigating,
-
-            activeHighRisk,
-
-            activeCritical,
-
-            activeHigh,
-
-            activeMedium
-
-        },
-
-        recommendedAction:
-            activeHighRisk > 0
-                ? "Prioritize the active high and critical cases first, then review the remaining backlog for assignment and disposition."
-                : "Review the active population for stalled cases and determine the appropriate next disposition."
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-3. RISK ACCEPTANCE CONCENTRATION
-------------------------------------------
-*/
-
-if (riskAccepted > 0) {
-
-    let description =
-        `${riskAccepted} of ${totalCases} cases (${riskAcceptanceRate}%) ` +
-        `are currently risk accepted.`;
-
-    if (dispositionedCases > 0) {
-
-        description +=
-            ` Risk acceptance accounts for ${riskAcceptanceShare}% ` +
-            `of all dispositioned cases.`;
-
-    }
-
-
-    if (highCriticalRiskAccepted > 0) {
-
-        description +=
-            ` This includes ${highCriticalRiskAccepted} high or critical cases`;
-
-        if (criticalRiskAccepted > 0 && highRiskAccepted > 0) {
-
-            description +=
-                ` (${criticalRiskAccepted} critical and ${highRiskAccepted} high)`;
-
-        }
-        else if (criticalRiskAccepted > 0) {
-
-            description +=
-                ` (${criticalRiskAccepted} critical)`;
-
-        }
-        else {
-
-            description +=
-                ` (${highRiskAccepted} high)`;
-
-        }
-
-        description +=
-            ", so the accepted-risk population contains material-severity cases.";
-
-    }
-
-
-    findings.push({
-
-        type:
-            "risk_acceptance",
-
-        severity:
-            criticalRiskAccepted > 0
-                ? "medium"
-                : highCriticalRiskAccepted > 0
-                    ? "medium"
-                    : "low",
-
-        title:
-            highCriticalRiskAccepted > 0
-                ? "Risk acceptance includes high-severity cases"
-                : "Risk acceptance is the primary disposition",
-
-        description,
-
-        evidence: {
-
-            totalCases,
-
-            riskAccepted,
-
-            riskAcceptanceRate,
-
-            riskAcceptanceShare,
-
-            critical:
-                criticalRiskAccepted,
-
-            high:
-                highRiskAccepted,
-
-            medium:
-                riskAcceptedSeverity.medium,
-
-            low:
-                riskAcceptedSeverity.low
-
-        },
-
-        recommendedAction:
-            highCriticalRiskAccepted > 0
-                ? "Validate that each high and critical risk acceptance has clear business justification, appropriate ownership, and an auditable decision basis."
-                : "Periodically validate the business justification and ownership of accepted-risk cases."
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-4. HIGH-RISK OUTCOME QUALITY
-------------------------------------------
-*/
-
-if (highCriticalRiskAccepted > 0) {
-
-    const highRiskTotal =
-        highCriticalRiskAccepted +
-        activeHighRisk;
-
-    let description =
-        `${highCriticalRiskAccepted} high or critical cases have reached ` +
-        `risk acceptance.`;
-
-    if (activeHighRisk > 0) {
-
-        description +=
-            ` Another ${activeHighRisk} high or critical cases remain active, ` +
-            `including ${activeCritical} critical and ${activeHigh} high.`;
-
-    }
-    else {
-
-        description +=
-            ` No high or critical cases currently remain active.`;
-
-    }
-
-
-    findings.push({
-
-        type:
-            "high_risk_outcome",
-
-        severity:
-            activeHighRisk > 0
-                ? "medium"
-                : "info",
-
-        title:
-            activeHighRisk > 0
-                ? "High-risk cases are split between acceptance and active work"
-                : "High-risk cases have reached disposition",
-
-        description,
-
-        evidence: {
-
-            riskAccepted:
-                highCriticalRiskAccepted,
-
-            criticalRiskAccepted,
-
-            highRiskAccepted,
-
-            activeHighRisk,
-
-            activeCritical,
-
-            activeHigh,
-
-            totalHighRisk:
-                highRiskTotal
-
-        },
-
-        recommendedAction:
-            activeHighRisk > 0
-                ? "Review the active high and critical cases first, then validate the business justification for accepted-risk decisions."
-                : "Periodically review high and critical risk-acceptance decisions to confirm the accepted business risk remains valid."
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-5. FORMAL CLOSURE GAP
-------------------------------------------
-*/
-
-if (
-    dispositionedCases > 0 &&
-    formallyClosed === 0
-) {
-
-    findings.push({
-
-        type:
-            "formal_closure_gap",
-
-        severity:
-            "medium",
-
-        title:
-            "Disposition is occurring without formal case closure",
-
-        description:
-            `${dispositionedCases} cases have reached a disposition, but none ` +
-            `are formally resolved or closed. ` +
-            `The current dispositioned population is therefore being driven ` +
-            `entirely by risk acceptance or false-positive decisions rather ` +
-            `than formal closure.`,
-
-        evidence: {
-
-            dispositionedCases,
-
-            riskAccepted,
-
-            falsePositive,
-
-            formallyClosed,
-
-            formalClosureRate
-
-        },
-
-        recommendedAction:
-            "Confirm that risk-accepted and false-positive outcomes are being used intentionally and that cases requiring formal resolution are not being left without closure."
-
-    });
-
-}
-
-
-/*
-------------------------------------------
-6. FALSE-POSITIVE SIGNAL
-------------------------------------------
-*/
-
-if (falsePositive > 0) {
-
-    const falsePositiveRate =
-        totalCases > 0
             ? Number(
                 (
-                    falsePositive /
-                    totalCases *
+                    riskAccepted /
+                    dispositionedCases *
+                    100
+                ).toFixed(1)
+            )
+            : 0;
+
+    const formalClosureShare =
+        dispositionedCases > 0
+            ? Number(
+                (
+                    formallyClosed /
+                    dispositionedCases *
                     100
                 ).toFixed(1)
             )
             : 0;
 
 
-    findings.push({
+    /*
+    ------------------------------------------
+    1. OVERALL CASE POSITION
+    ------------------------------------------
+    */
 
-        type:
-            "false_positive",
+    if (totalCases > 0) {
 
-        severity:
-            falsePositiveRate >= 10
-                ? "medium"
-                : "low",
+        let position;
 
-        title:
-            "False-positive dispositions are present",
+        if (activeRate >= 75) {
 
-        description:
-            `${falsePositive} case${falsePositive === 1 ? "" : "s"} ` +
-            `(${falsePositiveRate}% of the total population) ` +
-            `ha${falsePositive === 1 ? "s" : "ve"} been classified as false positive. ` +
-            `This provides a signal for reviewing whether detection logic or policy conditions can be tuned.`,
+            position =
+                "The case population is primarily active";
 
-        evidence: {
+        }
+        else if (dispositionRate >= 75) {
 
-            falsePositive,
+            position =
+                "The majority of cases have reached a disposition";
 
-            falsePositiveRate,
+        }
+        else {
 
-            totalCases
+            position =
+                "Case handling is split between active and dispositioned work";
 
-        },
-
-        recommendedAction:
-            "Review false-positive cases for recurring patterns and determine whether detection rules or policy conditions can be tuned without reducing meaningful coverage."
-
-    });
-
-}
+        }
 
 
-/*
-------------------------------------------
-7. POSITIVE STATE — HIGH-RISK BACKLOG CLEAR
-------------------------------------------
-*/
+        let detail;
 
-if (
-    totalCases > 0 &&
-    activeHighRisk === 0 &&
-    highCriticalRiskAccepted > 0
-) {
+        if (
+            activeCases > 0 &&
+            dispositionedCases > 0
+        ) {
 
-    findings.push({
+            detail =
+                `${activeCases} cases (${activeRate}%) remain active while ` +
+                `${dispositionedCases} (${dispositionRate}%) have reached a disposition.`;
 
-        type:
-            "high_risk_backlog_clear",
+        }
+        else if (activeCases > 0) {
 
-        severity:
-            "info",
+            detail =
+                `All ${activeCases} cases remain active with no recorded disposition.`;
 
-        title:
-            "No high or critical cases remain active",
+        }
+        else {
 
-        description:
-            `All currently tracked high and critical cases have reached a ` +
-            `recorded disposition. ${highCriticalRiskAccepted} were risk accepted, ` +
-            `with no high or critical cases remaining in an open or active state.`,
+            detail =
+                `All ${dispositionedCases} cases have reached a recorded disposition.`;
 
-        evidence: {
+        }
 
-            highCriticalRiskAccepted,
 
-            criticalRiskAccepted,
+        findings.push({
 
-            highRiskAccepted,
+            type:
+                "case_disposition",
 
-            activeHighRisk: 0
+            severity:
+                activeRate >= 75
+                    ? "medium"
+                    : dispositionRate >= 75
+                        ? "low"
+                        : "medium",
 
-        },
+            title:
+                position,
 
-        recommendedAction:
-            "No immediate high-risk backlog action is required. Continue monitoring newly generated high and critical cases and periodically validate existing risk-acceptance decisions."
+            description:
+                `${detail} ` +
+                (
+                    riskAccepted > 0
+                        ? `${riskAccepted} are risk accepted, representing ` +
+                        `${riskAcceptanceShare}% of all dispositioned cases.`
+                        : "No cases currently carry a risk-accepted disposition."
+                ),
 
-    });
+            evidence: {
 
-}
+                totalCases,
+
+                activeCases,
+
+                activeRate,
+
+                dispositionedCases,
+
+                dispositionRate,
+
+                riskAccepted,
+
+                riskAcceptanceShare
+
+            },
+
+            recommendedAction:
+                activeCases > dispositionedCases
+                    ? "Prioritize the active population and determine which cases require assignment, investigation, risk acceptance, or formal closure."
+                    : "Continue monitoring disposition quality and ensure accepted-risk and formally closed cases remain appropriately documented."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    2. ACTIVE BACKLOG
+    ------------------------------------------
+    */
+
+    if (activeCases > 0) {
+
+        let backlogDescription =
+            `${activeCases} of ${totalCases} cases (${activeRate}%) remain ` +
+            `in an open, active, or investigating state.`;
+
+        if (outcomes.open > 0) {
+
+            backlogDescription +=
+                ` ${outcomes.open} are still open`;
+
+            if (outcomes.active > 0 || outcomes.investigating > 0) {
+
+                backlogDescription +=
+                    `, with ${outcomes.active + outcomes.investigating} already in active investigation`;
+
+            }
+
+            backlogDescription += ".";
+
+        }
+
+
+        if (
+            activeHighRisk > 0
+        ) {
+
+            backlogDescription +=
+                ` ${activeHighRisk} of the active cases are high or critical severity, ` +
+                `which represents the portion of the backlog requiring the closest attention.`;
+
+        }
+
+
+        findings.push({
+
+            type:
+                "active_case_load",
+
+            severity:
+                activeHighRisk > 0
+                    ? "high"
+                    : activeRate >= 75
+                        ? "high"
+                        : "medium",
+
+            title:
+                activeHighRisk > 0
+                    ? "Active backlog includes high-risk cases"
+                    : "Active case backlog remains",
+
+            description:
+                backlogDescription,
+
+            evidence: {
+
+                activeCases,
+
+                activeRate,
+
+                open:
+                    outcomes.open,
+
+                active:
+                    outcomes.active,
+
+                investigating:
+                    outcomes.investigating,
+
+                activeHighRisk,
+
+                activeCritical,
+
+                activeHigh,
+
+                activeMedium
+
+            },
+
+            recommendedAction:
+                activeHighRisk > 0
+                    ? "Prioritize the active high and critical cases first, then review the remaining backlog for assignment and disposition."
+                    : "Review the active population for stalled cases and determine the appropriate next disposition."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    3. RISK ACCEPTANCE CONCENTRATION
+    ------------------------------------------
+    */
+
+    if (riskAccepted > 0) {
+
+        let description =
+            `${riskAccepted} of ${totalCases} cases (${riskAcceptanceRate}%) ` +
+            `are currently risk accepted.`;
+
+        if (dispositionedCases > 0) {
+
+            description +=
+                ` Risk acceptance accounts for ${riskAcceptanceShare}% ` +
+                `of all dispositioned cases.`;
+
+        }
+
+
+        if (highCriticalRiskAccepted > 0) {
+
+            description +=
+                ` This includes ${highCriticalRiskAccepted} high or critical cases`;
+
+            if (criticalRiskAccepted > 0 && highRiskAccepted > 0) {
+
+                description +=
+                    ` (${criticalRiskAccepted} critical and ${highRiskAccepted} high)`;
+
+            }
+            else if (criticalRiskAccepted > 0) {
+
+                description +=
+                    ` (${criticalRiskAccepted} critical)`;
+
+            }
+            else {
+
+                description +=
+                    ` (${highRiskAccepted} high)`;
+
+            }
+
+            description +=
+                ", so the accepted-risk population contains material-severity cases.";
+
+        }
+
+
+        findings.push({
+
+            type:
+                "risk_acceptance",
+
+            severity:
+                criticalRiskAccepted > 0
+                    ? "medium"
+                    : highCriticalRiskAccepted > 0
+                        ? "medium"
+                        : "low",
+
+            title:
+                highCriticalRiskAccepted > 0
+                    ? "Risk acceptance includes high-severity cases"
+                    : "Risk acceptance is the primary disposition",
+
+            description,
+
+            evidence: {
+
+                totalCases,
+
+                riskAccepted,
+
+                riskAcceptanceRate,
+
+                riskAcceptanceShare,
+
+                critical:
+                    criticalRiskAccepted,
+
+                high:
+                    highRiskAccepted,
+
+                medium:
+                    riskAcceptedSeverity.medium,
+
+                low:
+                    riskAcceptedSeverity.low
+
+            },
+
+            recommendedAction:
+                highCriticalRiskAccepted > 0
+                    ? "Validate that each high and critical risk acceptance has clear business justification, appropriate ownership, and an auditable decision basis."
+                    : "Periodically validate the business justification and ownership of accepted-risk cases."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    4. HIGH-RISK OUTCOME QUALITY
+    ------------------------------------------
+    */
+
+    if (highCriticalRiskAccepted > 0) {
+
+        const highRiskTotal =
+            highCriticalRiskAccepted +
+            activeHighRisk;
+
+        let description =
+            `${highCriticalRiskAccepted} high or critical cases have reached ` +
+            `risk acceptance.`;
+
+        if (activeHighRisk > 0) {
+
+            description +=
+                ` Another ${activeHighRisk} high or critical cases remain active, ` +
+                `including ${activeCritical} critical and ${activeHigh} high.`;
+
+        }
+        else {
+
+            description +=
+                ` No high or critical cases currently remain active.`;
+
+        }
+
+
+        findings.push({
+
+            type:
+                "high_risk_outcome",
+
+            severity:
+                activeHighRisk > 0
+                    ? "medium"
+                    : "info",
+
+            title:
+                activeHighRisk > 0
+                    ? "High-risk cases are split between acceptance and active work"
+                    : "High-risk cases have reached disposition",
+
+            description,
+
+            evidence: {
+
+                riskAccepted:
+                    highCriticalRiskAccepted,
+
+                criticalRiskAccepted,
+
+                highRiskAccepted,
+
+                activeHighRisk,
+
+                activeCritical,
+
+                activeHigh,
+
+                totalHighRisk:
+                    highRiskTotal
+
+            },
+
+            recommendedAction:
+                activeHighRisk > 0
+                    ? "Review the active high and critical cases first, then validate the business justification for accepted-risk decisions."
+                    : "Periodically review high and critical risk-acceptance decisions to confirm the accepted business risk remains valid."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    5. FORMAL CLOSURE GAP
+    ------------------------------------------
+    */
+
+    if (
+        dispositionedCases > 0 &&
+        formallyClosed === 0
+    ) {
+
+        findings.push({
+
+            type:
+                "formal_closure_gap",
+
+            severity:
+                "medium",
+
+            title:
+                "Disposition is occurring without formal case closure",
+
+            description:
+                `${dispositionedCases} cases have reached a disposition, but none ` +
+                `are formally resolved or closed. ` +
+                `The current dispositioned population is therefore being driven ` +
+                `entirely by risk acceptance or false-positive decisions rather ` +
+                `than formal closure.`,
+
+            evidence: {
+
+                dispositionedCases,
+
+                riskAccepted,
+
+                falsePositive,
+
+                formallyClosed,
+
+                formalClosureRate
+
+            },
+
+            recommendedAction:
+                "Confirm that risk-accepted and false-positive outcomes are being used intentionally and that cases requiring formal resolution are not being left without closure."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    6. FALSE-POSITIVE SIGNAL
+    ------------------------------------------
+    */
+
+    if (falsePositive > 0) {
+
+        const falsePositiveRate =
+            totalCases > 0
+                ? Number(
+                    (
+                        falsePositive /
+                        totalCases *
+                        100
+                    ).toFixed(1)
+                )
+                : 0;
+
+
+        findings.push({
+
+            type:
+                "false_positive",
+
+            severity:
+                falsePositiveRate >= 10
+                    ? "medium"
+                    : "low",
+
+            title:
+                "False-positive dispositions are present",
+
+            description:
+                `${falsePositive} case${falsePositive === 1 ? "" : "s"} ` +
+                `(${falsePositiveRate}% of the total population) ` +
+                `ha${falsePositive === 1 ? "s" : "ve"} been classified as false positive. ` +
+                `This provides a signal for reviewing whether detection logic or policy conditions can be tuned.`,
+
+            evidence: {
+
+                falsePositive,
+
+                falsePositiveRate,
+
+                totalCases
+
+            },
+
+            recommendedAction:
+                "Review false-positive cases for recurring patterns and determine whether detection rules or policy conditions can be tuned without reducing meaningful coverage."
+
+        });
+
+    }
+
+
+    /*
+    ------------------------------------------
+    7. POSITIVE STATE — HIGH-RISK BACKLOG CLEAR
+    ------------------------------------------
+    */
+
+    if (
+        totalCases > 0 &&
+        activeHighRisk === 0 &&
+        highCriticalRiskAccepted > 0
+    ) {
+
+        findings.push({
+
+            type:
+                "high_risk_backlog_clear",
+
+            severity:
+                "info",
+
+            title:
+                "No high or critical cases remain active",
+
+            description:
+                `All currently tracked high and critical cases have reached a ` +
+                `recorded disposition. ${highCriticalRiskAccepted} were risk accepted, ` +
+                `with no high or critical cases remaining in an open or active state.`,
+
+            evidence: {
+
+                highCriticalRiskAccepted,
+
+                criticalRiskAccepted,
+
+                highRiskAccepted,
+
+                activeHighRisk: 0
+
+            },
+
+            recommendedAction:
+                "No immediate high-risk backlog action is required. Continue monitoring newly generated high and critical cases and periodically validate existing risk-acceptance decisions."
+
+        });
+
+    }
 
 
     /*
@@ -6266,7 +6266,13 @@ CYERA SECURITY INTELLIGENCE
                 finding.evidence?.alertCount || 0,
 
             message:
-                finding.description
+                finding.description,
+
+            recommendedAction:
+                finding.recommendedAction || null,
+
+            evidence:
+                finding.evidence || {}
 
         });
     }
@@ -6292,15 +6298,15 @@ CASE OUTCOME & DISPOSITION INTELLIGENCE
         );
 
     const cyeraDispositionIntelligence =
-    await buildCyeraDispositionIntelligence(
-        env,
-        reportId
-    );
+        await buildCyeraDispositionIntelligence(
+            env,
+            reportId
+        );
     const cyeraOperationalIntelligence =
-    await getCyeraOperationalIntelligence(
-        env,
-        reportId
-    );
+        await getCyeraOperationalIntelligence(
+            env,
+            reportId
+        );
 
     /*
 ==========================================
@@ -6327,7 +6333,12 @@ CASE OUTCOME INSIGHTS
                 0,
 
             message:
-                finding.description
+                finding.description,
+            recommendedAction:
+                finding.recommendedAction || null,
+
+            evidence:
+                finding.evidence || {}
 
         });
 
