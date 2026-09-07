@@ -6262,6 +6262,9 @@ CYERA SECURITY INTELLIGENCE
             priority:
                 finding.severity,
 
+            title:
+                finding.title,
+
             metric:
                 finding.evidence?.alertCount || 0,
 
@@ -6325,6 +6328,9 @@ CASE OUTCOME INSIGHTS
 
             priority:
                 finding.severity,
+
+            title:
+                finding.title,
 
             metric:
                 finding.evidence?.total ||
